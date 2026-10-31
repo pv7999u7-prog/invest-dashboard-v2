@@ -341,6 +341,12 @@ function formCareer(kind) {
 const FORMS = { cost: formCost, trade: formTrade, cryptoFlow: formCryptoFlow, dca: formDca, plan: formPlan, expense: formExpense, loan: formLoan, house: formHouse, milestone: formMilestone, career: formCareer };
 
 function bindEdit() {
+  // ＋ 開頭的按鈕是「新增」：加號換成金色
+  document.querySelectorAll('.act').forEach(b => {
+    if (b.classList.contains('add') || !/^＋/.test(b.textContent)) return;
+    b.classList.add('add');
+    b.innerHTML = '<span class="plus">＋</span>' + b.innerHTML.replace(/^＋/, '');
+  });
   document.querySelectorAll('[data-form]').forEach(el => el.addEventListener('click', ev => {
     ev.stopPropagation();
     if (!ed()) { toast('請先更新 Apps Script 到最新版'); return; }
