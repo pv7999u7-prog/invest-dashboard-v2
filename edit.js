@@ -97,20 +97,24 @@ function formCost() {
     title: '成本變更',
     body: fSeg('dir', [['in', '投入'], ['out', '撤出']], 'in') + fDate('date', '日期') +
       fNum('total', '總金額（台幣）', '', '例如 400000') +
-      `<div class="grp">分配到哪裡</div>` + fNum('tw', '台股（台幣）', '', '0') +
-      `<div class="row2">${fNum('cube', '美股 CUBE（美金）', '', '0')}${fNum('ft', '美股 Firstrade（美金）', '', '0')}</div>` +
-      fNum('crypto', '加密貨幣（USDT）', '', '0') +
+      `<div class="grp">分配到哪裡<em>全部填台幣，美股和加密貨幣依匯率換成美金寫入</em></div>` + fNum('tw', '台股', '', '0') +
+      `<div class="row2">${fNum('cube', '美股 CUBE', '', '0')}${fNum('ft', '美股 Firstrade', '', '0')}</div>` +
+      `<div class="row2">${fNum('crypto', '加密貨幣', '', '0')}${fNum('fx', '匯率', e.fx ? +e.fx.toFixed(2) : '', '', '可改成實際換匯')}</div>` +
       hint('costHint') + fText('note', '備註', '', '例如 7.5W入台股'),
     after(f) {
-      const t = nval(f, 'total') || 0, tw = nval(f, 'tw') || 0, usd = (nval(f, 'cube') || 0) + (nval(f, 'ft') || 0) + (nval(f, 'crypto') || 0);
-      const rest = t - tw - usd * (e.fx || 0);
-      f.querySelector('#costHint').innerHTML = t ? `美金以匯率 ${fmtN(e.fx, 2)} 換算約 NT$${fmtN(usd * e.fx)}；` +
-        (Math.abs(rest) < 1000 ? '已全部分配。' : `其餘 NT$${fmtN(rest)} 只記在總成本。`) : '';
+      const t = nval(f, 'total') || 0, fx = nval(f, 'fx') || 0, parts = ['tw', 'cube', 'ft', 'crypto'].map(k => nval(f, k) || 0);
+      const rest = t - parts.reduce((a, b) => a + b, 0);
+      const conv = [['CUBE', parts[1]], ['Firstrade', parts[2]], ['加密貨幣', parts[3]]].filter(x => x[1]);
+      f.querySelector('#costHint').innerHTML = (fx && conv.length ? conv.map(x => `${x[0]} 約 ${x[0] === '加密貨幣' ? '' : 'US$'}${fmtN(x[1] / fx, 2)}${x[0] === '加密貨幣' ? ' USDT' : ''}`).join('・') + '<br>' : '') +
+        (t ? (Math.abs(rest) < 1 ? '已全部分配。' : rest > 0 ? `其餘 NT$${fmtN(rest)} 只記在總成本。` : `分配比總金額多 NT$${fmtN(-rest)}，請檢查。`) : '');
     },
     submit(f) {
       const s = val(f, 'dir') === 'out' ? -1 : 1, t = req(nval(f, 'total'), '總金額');
+      const fx = nval(f, 'fx'), usd = k => { const n = nval(f, k) || 0; if (n && !(fx > 0)) throw new Error('請填匯率'); return n ? s * Math.round(n / fx * 100) / 100 : 0; };
+      const sum = ['tw', 'cube', 'ft', 'crypto'].reduce((a, k) => a + (nval(f, k) || 0), 0);
+      if (sum > t + 0.5) throw new Error('分配的金額比總金額多');
       return ['cost', { date: slash(val(f, 'date')), total: s * t, tw: s * (nval(f, 'tw') || 0),
-        us: [{ broker: 'CUBE', usd: s * (nval(f, 'cube') || 0) }, { broker: 'Firstrade', usd: s * (nval(f, 'ft') || 0) }], crypto: s * (nval(f, 'crypto') || 0), note: val(f, 'note') }];
+        us: [{ broker: 'CUBE', usd: usd('cube') }, { broker: 'Firstrade', usd: usd('ft') }], crypto: usd('crypto'), note: val(f, 'note') }];
     }
   });
 }
