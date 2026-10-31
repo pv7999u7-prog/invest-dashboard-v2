@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>安裝主畫面圖示</title>
+<style>
+body { font-family: -apple-system, "PingFang TC", sans-serif; margin: 0; padding: 28px 20px 40px; background: #0f1a33; color: #f0efec; line-height: 1.6; }
+.wrap { max-width: 520px; margin: 0 auto; }
+img { display: block; width: 96px; height: 96px; border-radius: 22px; margin: 0 auto 18px; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+h1 { font-size: 22px; text-align: center; margin: 0 0 6px; }
+.sub { text-align: center; color: #b8bfd3; margin: 0 0 24px; font-size: 14px; }
+button { display: block; width: 100%; padding: 14px; border: 0; border-radius: 14px; background: #3987e5; color: #fff; font-size: 17px; font-weight: 600; }
+ol { padding-left: 20px; color: #d7dbe6; font-size: 15px; }
+li { margin: 8px 0; }
+.note { font-size: 13px; color: #9aa3b8; margin-top: 20px; }
+#msg { text-align: center; font-size: 14px; color: #f5c04a; min-height: 20px; margin: 10px 0 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <img src="icon-v7-180.png" alt="HK 圖示">
+  <h1>安裝「投資總覽 v2」主畫面圖示</h1>
+  <p class="sub">用描述檔把圖示直接裝到主畫面，不靠 Safari 抓圖</p>
+  <button id="dl">下載描述檔</button>
+  <p id="msg"></p>
+  <ol>
+    <li>按上面的按鈕，跳出提示時按「<b>允許</b>」或「<b>下載</b>」</li>
+    <li>打開 <b>設定</b> App，最上面會出現「<b>已下載描述檔</b>」，點進去<br>（沒看到的話：設定 → 一般 → VPN 與裝置管理）</li>
+    <li>按右上角「<b>安裝</b>」→ 輸入 iPhone 密碼 → 再按「安裝」→「完成」</li>
+    <li>回主畫面就會看到 HK 圖示的「投資總覽 v2」</li>
+  </ol>
+  <p class="note">如果按了按鈕只下載成檔案：打開「檔案」App → 下載項目 → 點「投資總覽v2圖示.mobileconfig」，再做第 2 步。<br>
+  描述檔只包含 App 網址與圖示。要移除：設定 → 一般 → VPN 與裝置管理 → 投資總覽 v2 主畫面圖示 → 移除描述檔。</p>
+</div>
+<script>
+// GitHub Pages 會把 .mobileconfig 當成文字顯示，所以改用指定正確類型的下載，iPhone 才會當成描述檔
+document.getElementById('dl').addEventListener('click', async () => {
+  const msg = document.getElementById('msg');
+  msg.textContent = '準備中…';
+  try {
+    const text = await fetch('install-icon.mobileconfig', { cache: 'no-store' }).then(r => r.text());
+    const blob = new Blob([text], { type: 'application/x-apple-aspen-config' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = '投資總覽v2圖示.mobileconfig';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    msg.textContent = '下載好之後，請打開「設定」App 繼續安裝';
+  } catch (e) {
+    msg.textContent = '下載失敗，請確認有網路後再試一次';
+  }
+});
+</script>
+</body>
+</html>

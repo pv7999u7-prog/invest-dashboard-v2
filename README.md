@@ -44,3 +44,7 @@ Apps Script 每天晚上 10 點執行一次（第一次從 App 連線時自動�
 
 - 改了 `app.js`／`edit.js`／`index.html` 後，把 `sw.js` 的 `VERSION` 加一號再推送。
 - 改了 `Code.gs` 要到 Apps Script **管理部署作業 → 編輯 → 版本選「新版本」** 才會生效。
+
+## 主畫面圖示
+
+Safari「加入主畫面」抓不到圖示時，用 iPhone Safari 打開 https://pv7999u7-prog.github.io/invest-dashboard-v2/install-icon.html ，下載描述檔後到「設定」安裝，主畫面就會出現名稱為 HK 的圖示。
