@@ -8,7 +8,7 @@
 const KEY = '請改成你自己的密碼';
 
 // 程式碼版本（App 設定頁會顯示，用來確認部署的是不是最新版；這行不用改）
-const SCRIPT_VERSION = 18;
+const SCRIPT_VERSION = 19;
 
 // 要讀的工作表與範圍（試算表版面有大改時，才需要調整這裡）
 const RANGES = {
@@ -607,7 +607,7 @@ function dcaItems() {
     vals.forEach((r, i) => {
       for (let c = 0; c < r.length; c++) {
         if (String(r[c]).trim() !== '累計股數') continue;
-        const col = c - 5;   // 這張表的第一欄（股名）
+        const col = c - 6;   // 這張表的第一欄（股名）：股名、金額/月、起始日、迄今、月數、總投入、累計股數，累計股數往左 6 欄
         const cur = /USD/.test(String(vals[i][col + 1])) ? 'USD' : 'NTD';
         for (let j = i + 1; j < vals.length && vals[j][col] !== '' && String(vals[j][col]).trim() !== 'Total'; j++) {
           const v = vals[j];
