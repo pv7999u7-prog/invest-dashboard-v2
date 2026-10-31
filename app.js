@@ -4,8 +4,8 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '2.4.0';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
-const LATEST_SCRIPT = 17;   // 最新 Code.gs 的 SCRIPT_VERSION
+const APP_VERSION = '2.5.0';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const LATEST_SCRIPT = 18;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
 
@@ -405,7 +405,7 @@ function loanSchedule(l) {
 function parseCareer(rows) {
   const years = [];
   let cur = null, salary = null;
-  rows.forEach(x => {
+  rows.forEach((x, i) => {
     const y = num(x[0]);
     const take = (k, v) => { if (v != null) cur[k] = v; };
     if (Number.isInteger(y) && y > 1990 && y < 2100) {
@@ -418,7 +418,7 @@ function parseCareer(rows) {
     } else if (!cur) return;
     else {
       const label = str(x[1]), s = num(x[5]) || num(x[12]);
-      if (label) cur.events.push({ label, salary: s });
+      if (label) cur.events.push({ label, salary: s, row: i + 1 });   // row：BB 分頁的列號，用來修改、刪除
     }
     // 年度調薪（Q、R 欄）照它出現的那一列排進時間軸，調薪後月薪取同一列的 M 欄
     if (num(x[16])) cur.events.push({ raise: num(x[16]), raisePct: num(x[17]) ?? cur.raisePct, salary: num(x[12]) });
@@ -1192,7 +1192,8 @@ function pageCareer(d) {
   const lastMid = ys.slice().reverse().find(y => y.bonus);
   let h = `${head('職涯與薪資')}
   ${ed() ? `<div class="acts wide"><button class="act" data-form="career" data-arg="ye">＋ 年前分紅</button><button class="act" data-form="career" data-arg="mid">＋ 年中分紅</button>
-    <button class="act" data-form="career" data-arg="year">＋ 調薪升遷</button><button class="act" data-form="career" data-arg="title">改職稱</button></div>` : ''}
+    <button class="act" data-form="career" data-arg="year">＋ 調薪升遷</button><button class="act" data-form="career" data-arg="event">＋ 結構調薪／其他</button>
+    <button class="act" data-form="career" data-arg="title">改職稱</button></div>` : ''}
   <div class="card hero">
     <div class="lbl">${last.year} 年・${esc(last.title)}</div>
     <div class="big">${hidden ? MASK : 'NT$' + int(c.salary) + '<span style="font-size:17px;font-weight:600;color:var(--text-secondary)"> / 月</span>'}</div>
@@ -1233,10 +1234,10 @@ function pageCareer(d) {
   ys.forEach(y => {
     if (y === ys[0]) tl.push({ d: y.year, t: `回任・${y.title}` + (firstSalary ? `，月薪 ${hidden ? MASK : int(firstSalary)}` : '') });
     else if (y.promoted) tl.push({ d: y.year, t: `升遷為 ${y.title}` });
-    y.events.forEach(e => tl.push({ d: y.year, t: (e.raise ? `年度調薪 ${hidden ? '' : '+' + int(e.raise) + '・'}${pctPlain(e.raisePct)}` : e.label)
+    y.events.forEach(e => tl.push({ d: y.year, arg: e.label && e.row ? e.row : null, t: (e.raise ? `年度調薪 ${hidden ? '' : '+' + int(e.raise) + '・'}${pctPlain(e.raisePct)}` : esc(e.label))
       + (e.salary ? `，月薪 ${hidden ? MASK : int(e.salary)}` : '') }));
   });
-  h += `<div class="sec">職位與調薪</div><div class="card"><ul class="tl">${tl.reverse().map(x => `<li><div class="d">${x.d}</div><div class="x">${x.t}</div></li>`).join('')}</ul></div>`;
+  h += `<div class="sec">職位與調薪${ed() ? '<em>點結構調薪等項目可以修改或刪除</em>' : ''}</div><div class="card"><ul class="tl">${tl.reverse().map(x => `<li${x.arg && ed() ? ` class="link" data-form="careerEvent" data-arg="${x.arg}"` : ''}><div class="d">${x.d}</div><div class="x">${x.t}</div></li>`).join('')}</ul></div>`;
 
   h += `<div class="sec">逐年明細</div><div class="list">${ys.slice().reverse().map(y => `<div class="row">
     <div class="main"><div class="t1" style="font-size:15px">${y.year}・${esc(y.title)}${y.promoted ? ' <span class="pill up" style="font-size:11px;padding:1px 6px">升遷</span>' : ''}</div>

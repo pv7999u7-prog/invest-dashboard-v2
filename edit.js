@@ -350,9 +350,43 @@ function formCareer(kind) {
       after: f => { const s = nval(f, 'salary'); f.querySelector('#rsHint').textContent = s && last.salary ? `調薪 ${s - last.salary >= 0 ? '+' : ''}${fmtN(s - last.salary)}（${((s / last.salary - 1) * 100).toFixed(1)}%）` : ''; },
       submit: f => ['career', { op: 'year', year: req(nval(f, 'year'), '年度'), salary: req(nval(f, 'salary'), '調薪後月薪'), promoted: val(f, 'promoted') === '1', title: val(f, 'title') }] },
     title: { title: '修改職稱', body: yearSel(last.year) + fText('title', '職稱', last.title) + fSeg('promoted', [['0', '一般'], ['1', '升遷（加 ↑）']], '0'),
-      submit: f => ['career', { op: 'title', year: Number(val(f, 'year')), title: val(f, 'title'), promoted: val(f, 'promoted') === '1' }] }
+      submit: f => ['career', { op: 'title', year: Number(val(f, 'year')), title: val(f, 'title'), promoted: val(f, 'promoted') === '1' }] },
+    // 年度中間的項目：結構調薪（名稱自動是「11月結構調薪」）或自訂名稱；寫在那一年底下的新一列
+    event: { title: '結構調薪／其他項目',
+      body: yearSel(last.year) + fSeg('kind', [['struct', '結構調薪'], ['custom', '自訂名稱']], 'struct') +
+        `<div id="evStruct">${fSelect('month', '月份', Array.from({ length: 12 }, (_, i) => [String(i + 1), (i + 1) + ' 月']), String(new Date().getMonth() + 1))}</div>` +
+        `<div id="evCustom">${fText('label', '項目名稱', '', '例如 特別調薪、留任獎金')}</div>` +
+        fNum('salary', '調整後月薪', '', `目前 ${fmtN(last.salary)}`, '自訂項目沒有調薪可以空白') + hint('evHint'),
+      after: f => {
+        const st = val(f, 'kind') === 'struct', s = nval(f, 'salary');
+        f.querySelector('#evStruct').style.display = st ? '' : 'none';
+        f.querySelector('#evCustom').style.display = st ? 'none' : '';
+        f.querySelector('#evHint').textContent = s && last.salary ? `月薪 ${s - last.salary >= 0 ? '+' : ''}${fmtN(s - last.salary)}（${((s / last.salary - 1) * 100).toFixed(1)}%）` : '';
+      },
+      submit: f => {
+        const st = val(f, 'kind') === 'struct', label = st ? `${val(f, 'month')}月結構調薪` : val(f, 'label'), sal = nval(f, 'salary');
+        if (!label) throw new Error('請填項目名稱');
+        if (st && !sal) throw new Error('請填調整後月薪');
+        return ['career', { op: 'event', year: Number(val(f, 'year')), label, salary: sal || '' }];
+      } }
   };
   openSheet(specs[kind]);
+}
+
+// 時間軸上的項目（結構調薪、自訂項目）：改名稱、月薪，或刪除
+function formCareerEvent(row) {
+  let ev = null, yr = null;
+  ((state.data && state.data.career && state.data.career.years) || []).forEach(y => y.events.forEach(e => { if (e.row === Number(row)) { ev = e; yr = y.year; } }));
+  if (!ev) return;
+  openSheet({
+    title: `${yr} 年・${esc(ev.label)}`, ok: '儲存修改',
+    body: fText('label', '項目名稱', ev.label) + fNum('salary', '調整後月薪', ev.salary, '', '沒有調薪可以空白'),
+    submit: f => {
+      if (!val(f, 'label')) throw new Error('請填項目名稱');
+      return ['career', { op: 'eventSet', row: Number(row), expect: ev.label, label: val(f, 'label'), salary: nval(f, 'salary') || '' }];
+    },
+    extra: [{ label: '刪除這個項目', run: () => (confirm(`確定要刪除「${ev.label}」嗎？刪錯了可以按復原。`) ? ['career', { op: 'eventDel', row: Number(row), expect: ev.label }] : null) }]
+  });
 }
 
 /* ---------- 9. 明細修改、刪除（資金異動、台股、美股、加密貨幣） ---------- */
@@ -464,7 +498,7 @@ function formCash(id) {
 }
 
 /* ---------- 綁定 ---------- */
-const FORMS = { cost: formCost, trade: formTrade, cryptoFlow: formCryptoFlow, dca: formDca, plan: formPlan, expense: formExpense, loan: formLoan, house: formHouse, milestone: formMilestone, career: formCareer, ledger: formLedger, cash: formCash };
+const FORMS = { cost: formCost, trade: formTrade, cryptoFlow: formCryptoFlow, dca: formDca, plan: formPlan, expense: formExpense, loan: formLoan, house: formHouse, milestone: formMilestone, career: formCareer, careerEvent: formCareerEvent, ledger: formLedger, cash: formCash };
 
 function bindEdit() {
   // ＋ 開頭的按鈕是「新增」：加號換成金色

@@ -8,7 +8,7 @@
 const KEY = '請改成你自己的密碼';
 
 // 程式碼版本（App 設定頁會顯示，用來確認部署的是不是最新版；這行不用改）
-const SCRIPT_VERSION = 17;
+const SCRIPT_VERSION = 18;
 
 // 要讀的工作表與範圍（試算表版面有大改時，才需要調整這裡）
 const RANGES = {
@@ -299,9 +299,26 @@ const ACTIONS = {
     return '已更新里程碑';
   },
 
-  // 職涯：op 'mid' 年中分紅、'ye' 年前分紅（職務加給＋年終）、'year' 新增年度（調薪／升遷）、'title' 改職稱
+  // 職涯：op 'mid' 年中分紅、'ye' 年前分紅（職務加給＋年終）、'year' 新增年度（調薪／升遷）、'title' 改職稱、
+  // 'event' 在某年底下加一列項目（例如「11月結構調薪」或自訂名稱，可以帶調整後月薪）、'eventSet' 改、'eventDel' 刪
   career(p) {
     const s = sh('BB'), info = careerInfo(), y = num(p.year);
+    if (p.op === 'eventSet' || p.op === 'eventDel') {
+      const row = num(p.row), v = row >= 1 ? s.getRange(row, 1, 1, 2).getValues()[0] : null;
+      const isYear = v && num(v[0]) > 1990 && num(v[0]) < 2100;
+      if (!v || isYear || String(v[1]).trim() !== String(p.expect || '').trim()) throw new Error('這個項目在試算表上已經變動，請下拉更新後再試');
+      if (p.op === 'eventDel') {
+        snap(s.getRange(row, 1, 1, s.getLastColumn()));
+        s.deleteRow(row);
+        recRow('rowDel', s, row);
+        return `已刪除「${v[1]}」`;
+      }
+      const label = need(p.label, '項目名稱', true), sal = num(p.salary);
+      put(s.getRange(row, 2), label);
+      put(s.getRange(row, 6), sal || '');
+      put(s.getRange(row, 13), sal || '');
+      return `已更新「${label}」`;
+    }
     const r = info.years.find(x => x.year === y);
     if (p.op === 'year') {
       if (r) throw new Error(y + ' 年已經有了');
@@ -324,6 +341,14 @@ const ACTIONS = {
       return `已新增 ${y} 年`;
     }
     if (!r) throw new Error('BB 分頁找不到 ' + y + ' 年');
+    if (p.op === 'event') {
+      const label = need(p.label, '項目名稱', true), sal = num(p.salary), row = r.lastRow + 1;
+      s.insertRowAfter(r.lastRow);
+      recRow('rowIns', s, row);
+      s.getRange(row, 2).setValue(label);
+      if (sal) { s.getRange(row, 6).setValue(sal); s.getRange(row, 13).setValue(sal); }
+      return `已新增 ${y} 年「${label}」`;
+    }
     if (p.op === 'mid') { put(s.getRange(r.row, 14), need(p.amount, '年中分紅')); putF(s.getRange(r.row, 15), `=IFERROR(N${r.row}/M${r.row},"")`); return `已記錄 ${y} 年中分紅`; }
     if (p.op === 'ye') {
       const a = num(p.allowance) || 0, b = need(p.bonus, '年終');
