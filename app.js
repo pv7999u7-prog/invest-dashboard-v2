@@ -4,7 +4,7 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '2.1.5';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const APP_VERSION = '2.1.6';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
 const LATEST_SCRIPT = 12;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
@@ -579,10 +579,13 @@ function svgText(parent, x, y, text, attrs = {}) {
   t.textContent = text;
   return t;
 }
-// 圖表提示：手指點一下就一直顯示，點圖表以外的地方才收起來（滑鼠則是移開就收）
+// 圖表提示：只有點到圖形（長條、線圖區）才顯示，點一下就一直顯示；點其他地方（包括圖上的文字）才收起來。滑鼠則是移開就收
 const openTips = new Set();
 document.addEventListener('pointerdown', e => {
-  openTips.forEach(tp => { if (!tp.host.isConnected) openTips.delete(tp); else if (!tp.host.contains(e.target)) tp.close(); });
+  openTips.forEach(tp => {
+    if (!tp.host.isConnected) openTips.delete(tp);
+    else if (!(e.target.closest && e.target.closest('.hit') && tp.host.contains(e.target))) tp.close();
+  });
 }, true);
 const mouseOnly = fn => ev => { if (ev.pointerType === 'mouse') fn(); };
 function makeTip(host) {
@@ -650,7 +653,7 @@ function trendChart(host, pts) {
   const cross = svgEl('line', { y1: m.t, y2: H - m.b, stroke: css('--axis'), opacity: 0 }, svg);
   const dot = svgEl('circle', { r: 5, fill: css('--gold'), stroke: css('--card'), 'stroke-width': 2, opacity: 0 }, svg);
   const tip = makeTip(host);
-  const hit = svgEl('rect', { x: 0, y: 0, width: W, height: H, fill: 'transparent' }, svg);
+  const hit = svgEl('rect', { class: 'hit', x: m.l, y: m.t, width: W - m.l - m.r, height: H - m.t - m.b, fill: 'transparent' }, svg);
   const move = ev => {
     const mx = pointerX(ev, svg);
     let best = pts[0];
@@ -688,7 +691,8 @@ function divergingChart(host, rows) {
     svgEl('path', { d: barPath(d.pct >= 0 ? xa : xb - w, by, w, bh, d.pct >= 0 ? 'right' : 'left'), fill: css(d.pct >= 0 ? '--pos' : '--neg') }, svg);
     svgText(svg, m.l - 8, y + rowH / 2 + 4, d.label, { 'text-anchor': 'end', 'font-size': 12.5, fill: css('--text-primary') });
     svgText(svg, d.pct >= 0 ? xb + 5 : xa - 5, y + rowH / 2 + 4, pct(d.pct), { 'text-anchor': d.pct >= 0 ? 'start' : 'end', 'font-size': 11.5, fill: css('--text-secondary') });
-    const hit = svgEl('rect', { x: 0, y, width: W, height: rowH, fill: 'transparent' }, svg);
+    const bx = d.pct >= 0 ? xa : xb - w, hw = Math.max(w + 12, 32);
+    const hit = svgEl('rect', { class: 'hit', x: bx + w / 2 - hw / 2, y: by - 6, width: hw, height: bh + 12, fill: 'transparent' }, svg);
     const show = () => tip.show(`<b>${esc(d.label)}</b>${d.html}`, (xa + xb) / 2, y + 4);
     hit.addEventListener('pointerenter', show);
     hit.addEventListener('pointerdown', show);
@@ -728,7 +732,8 @@ function columnChart(host, labels, series, opts = {}) {
       const v = series[0].values[i];
       if (v) svgText(svg, cx - (n > 1 ? groupW / 2 - bw / 2 : 0), Y(v) - 5, opts.topLabel(v), { 'text-anchor': 'middle', fill: css('--text-secondary') });
     }
-    const hit = svgEl('rect', { x: cx - band / 2, y: 0, width: band, height: H, fill: 'transparent' }, svg);
+    const top = Math.min(Y(0) - 24, Y(Math.max(0, ...series.map(s => s.values[i] || 0))) - 2);
+    const hit = svgEl('rect', { class: 'hit', x: cx - groupW / 2 - 6, y: top, width: groupW + 12, height: Y(0) - top, fill: 'transparent' }, svg);
     const show = () => tip.show(opts.tip(i), cx, Y(Math.max(...series.map(s => s.values[i] || 0))));
     hit.addEventListener('pointerenter', show);
     hit.addEventListener('pointerdown', show);
@@ -786,7 +791,7 @@ function hbarChart(host, rows) {
     svgEl('path', { d: barPath(m.l, y + 7, w, 16, 'right'), fill: css(r.color || '--s1') }, svg);
     svgText(svg, m.l - 8, y + rowH / 2 + 4, r.label, { 'text-anchor': 'end', 'font-size': 12.5, fill: css('--text-primary') });
     svgText(svg, m.l + w + 6, y + rowH / 2 + 4, hidden ? '••••' : r.text, { 'font-size': 11.5, fill: css('--text-secondary') });
-    const hit = svgEl('rect', { x: 0, y, width: W, height: rowH, fill: 'transparent' }, svg);
+    const hit = svgEl('rect', { class: 'hit', x: m.l, y: y + 2, width: Math.max(w, 32) + 4, height: rowH - 4, fill: 'transparent' }, svg);
     const show = () => tip.show(`<b>${esc(r.label)}</b>${r.html}`, m.l + w / 2, y + 4);
     hit.addEventListener('pointerenter', show);
     hit.addEventListener('pointerdown', show);
@@ -1239,7 +1244,7 @@ function loanChart(host, l) {
   const cross = svgEl('line', { y1: m.t, y2: H - m.b, stroke: css('--axis'), opacity: 0 }, svg);
   const dot = svgEl('circle', { r: 5, fill: css('--gold'), stroke: css('--card'), 'stroke-width': 2, opacity: 0 }, svg);
   const tip = makeTip(host);
-  const hit = svgEl('rect', { x: 0, y: 0, width: W, height: H, fill: 'transparent' }, svg);
+  const hit = svgEl('rect', { class: 'hit', x: m.l, y: m.t, width: W - m.l - m.r, height: H - m.t - m.b, fill: 'transparent' }, svg);
   const move = ev => {
     const mx = pointerX(ev, svg);
     let best = pts[0];
