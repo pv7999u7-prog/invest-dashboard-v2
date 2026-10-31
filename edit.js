@@ -345,28 +345,34 @@ function formCareer(kind) {
     ye: { title: '年前分紅（農曆年前）', body: yearSel(last.year) + `<div class="row2">${fNum('allowance', '職務加給', '', '0')}${fNum('bonus', '年終（分紅）')}</div>` + hint('yeHint'),
       after: f => { f.querySelector('#yeHint').textContent = `合計 NT$${fmtN((nval(f, 'allowance') || 0) + (nval(f, 'bonus') || 0))}`; },
       submit: f => ['career', { op: 'ye', year: Number(val(f, 'year')), allowance: nval(f, 'allowance') || 0, bonus: req(nval(f, 'bonus'), '年終') }] },
-    year: { title: '新年度（調薪／升遷）', body: fNum('year', '年度', last.year + 1) + fNum('salary', '調薪後月薪', '', `目前 ${fmtN(last.salary)}`) + hint('rsHint') +
-        fSeg('promoted', [['0', '沒有升遷'], ['1', '升遷']], '0') + fText('title', '職稱', last.title),
-      after: f => { const s = nval(f, 'salary'); f.querySelector('#rsHint').textContent = s && last.salary ? `調薪 ${s - last.salary >= 0 ? '+' : ''}${fmtN(s - last.salary)}（${((s / last.salary - 1) * 100).toFixed(1)}%）` : ''; },
-      submit: f => ['career', { op: 'year', year: req(nval(f, 'year'), '年度'), salary: req(nval(f, 'salary'), '調薪後月薪'), promoted: val(f, 'promoted') === '1', title: val(f, 'title') }] },
-    title: { title: '修改職稱', body: yearSel(last.year) + fText('title', '職稱', last.title) + fSeg('promoted', [['0', '一般'], ['1', '升遷（加 ↑）']], '0'),
-      submit: f => ['career', { op: 'title', year: Number(val(f, 'year')), title: val(f, 'title'), promoted: val(f, 'promoted') === '1' }] },
-    // 年度中間的項目：結構調薪（名稱自動是「11月結構調薪」）或自訂名稱；寫在那一年底下的新一列
-    event: { title: '結構調薪／其他項目',
-      body: yearSel(last.year) + fSeg('kind', [['struct', '結構調薪'], ['custom', '自訂名稱']], 'struct') +
-        `<div id="evStruct">${fSelect('month', '月份', Array.from({ length: 12 }, (_, i) => [String(i + 1), (i + 1) + ' 月']), String(new Date().getMonth() + 1))}</div>` +
-        `<div id="evCustom">${fText('label', '項目名稱', '', '例如 特別調薪、留任獎金')}</div>` +
-        fNum('salary', '調整後月薪', '', `目前 ${fmtN(last.salary)}`, '自訂項目沒有調薪可以空白') + hint('evHint'),
+    // 調薪升遷：一個表單四種類型，只顯示該類型要填的欄位
+    //   年度調薪升遷：新增下一年度（op 'year'）；結構調薪、自訂項目：寫在那一年底下的新一列（op 'event'，結構調薪名稱自動是「11月結構調薪」）；
+    //   改職稱：改某一年的職稱（op 'title'）
+    raise: { title: '調薪升遷',
+      body: fSeg('type', [['year', '年度調薪'], ['struct', '結構調薪'], ['custom', '自訂項目'], ['title', '改職稱']], 'year') +
+        `<div id="rNew">${fNum('ny', '新年度', last.year + 1)}</div><div id="rPick">${yearSel(last.year)}</div>` +
+        `<div id="rMonth">${fSelect('month', '月份', Array.from({ length: 12 }, (_, i) => [String(i + 1), (i + 1) + ' 月']), String(new Date().getMonth() + 1))}</div>` +
+        `<div id="rLabel">${fText('label', '項目名稱', '', '例如 特別調薪、留任獎金')}</div>` +
+        `<div id="rSal">${fNum('salary', '調整後月薪', '', `目前 ${fmtN(last.salary)}`)}${hint('rsHint')}</div>` +
+        `<div id="rTitle">${fSeg('promoted', [['0', '沒有升遷'], ['1', '升遷（職稱前加 ↑）']], '0')}${fText('title', '職稱', last.title)}</div>`,
       after: f => {
-        const st = val(f, 'kind') === 'struct', s = nval(f, 'salary');
-        f.querySelector('#evStruct').style.display = st ? '' : 'none';
-        f.querySelector('#evCustom').style.display = st ? 'none' : '';
-        f.querySelector('#evHint').textContent = s && last.salary ? `月薪 ${s - last.salary >= 0 ? '+' : ''}${fmtN(s - last.salary)}（${((s / last.salary - 1) * 100).toFixed(1)}%）` : '';
+        const t = val(f, 'type'), show = (id, on) => { f.querySelector(id).style.display = on ? '' : 'none'; };
+        show('#rNew', t === 'year'); show('#rPick', t !== 'year'); show('#rMonth', t === 'struct'); show('#rLabel', t === 'custom');
+        show('#rSal', t !== 'title'); show('#rTitle', t === 'year' || t === 'title');
+        const s = nval(f, 'salary');
+        f.querySelector('#rsHint').textContent = (t === 'custom' ? '沒有調薪可以空白。' : '') +
+          (s && last.salary ? `月薪 ${s - last.salary >= 0 ? '+' : ''}${fmtN(s - last.salary)}（${((s / last.salary - 1) * 100).toFixed(1)}%）` : '');
       },
       submit: f => {
-        const st = val(f, 'kind') === 'struct', label = st ? `${val(f, 'month')}月結構調薪` : val(f, 'label'), sal = nval(f, 'salary');
+        const t = val(f, 'type'), sal = nval(f, 'salary'), promoted = val(f, 'promoted') === '1';
+        if (t === 'year') return ['career', { op: 'year', year: req(nval(f, 'ny'), '新年度'), salary: req(sal, '調整後月薪'), promoted, title: val(f, 'title') }];
+        if (t === 'title') {
+          if (!val(f, 'title')) throw new Error('請填職稱');
+          return ['career', { op: 'title', year: Number(val(f, 'year')), title: val(f, 'title'), promoted }];
+        }
+        const label = t === 'struct' ? `${val(f, 'month')}月結構調薪` : val(f, 'label');
         if (!label) throw new Error('請填項目名稱');
-        if (st && !sal) throw new Error('請填調整後月薪');
+        if (t === 'struct' && !sal) throw new Error('請填調整後月薪');
         return ['career', { op: 'event', year: Number(val(f, 'year')), label, salary: sal || '' }];
       } }
   };
