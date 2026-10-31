@@ -4,7 +4,7 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '2.1.4';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const APP_VERSION = '2.1.5';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
 const LATEST_SCRIPT = 12;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
@@ -1141,12 +1141,12 @@ function pageCareer(d) {
       { axis: v => dec(v, 0) + 'k', maxBar: 22, tip: i => { const y = sal[i];
         return `<b>${y.year}・${esc(y.title)}</b>${tr('月薪', ntd(y.salary || y.bSalary))}${y.raise ? tr('調薪', (hidden ? MASK : '+' + int(y.raise)) + '（' + pctPlain(y.raisePct) + '）') : ''}${y.events.filter(e => e.label).map(e => tr(esc(e.label), e.salary ? ntd(e.salary) : '')).join('')}`; } }))}</div>`;
 
-  const bm = ys.filter(y => y.yeTotalMonths || y.bonusMonths);
-  h += `<div class="card"><h3>分紅月數</h3><p class="cap">農曆年前分紅與年中分紅，各相當幾個月薪</p>
+  const bm = ys.filter(y => y.yeTotal || y.bonus);
+  h += `<div class="card"><h3>分紅金額</h3><p class="cap">單位：萬元；點長條看各相當幾個月薪</p>
     <div class="legend"><span><i style="background:var(--s4)"></i>年前分紅</span><span><i style="background:var(--s5)"></i>年中分紅</span></div>
     ${chart('c-bonus', el => columnChart(el, bm.map(y => "'" + String(y.year).slice(2)), [
-      { name: '年前分紅', color: '--s4', values: bm.map(y => y.yeTotalMonths) }, { name: '年中分紅', color: '--s5', values: bm.map(y => y.bonusMonths) }],
-      { axis: v => (Number.isInteger(v) ? String(v) : dec(v, 1)), maxBar: 14, tip: i => { const y = bm[i];
+      { name: '年前分紅', color: '--s4', values: bm.map(y => y.yeTotal / 10000) }, { name: '年中分紅', color: '--s5', values: bm.map(y => y.bonus / 10000) }],
+      { axis: v => dec(v, 0), maxBar: 14, tip: i => { const y = bm[i];
         return `<b>${y.year}</b>${y.yeTotal ? tr('年前分紅', ntd(y.yeTotal) + '（' + y.yeTotalMonths + ' 個月）') : ''}${y.allowance ? tr('　職務加給', ntd(y.allowance)) : ''}${y.yeBonus ? tr('　年終', ntd(y.yeBonus)) : ''}${y.bonus ? tr('年中分紅', ntd(y.bonus) + '（' + y.bonusMonths + ' 個月）') : ''}`; } }))}</div>`;
 
   // 職位與調薪的時間軸
