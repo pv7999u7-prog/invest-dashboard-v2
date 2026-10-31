@@ -4,7 +4,7 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '2.1.3';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const APP_VERSION = '2.1.4';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
 const LATEST_SCRIPT = 12;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
@@ -579,18 +579,28 @@ function svgText(parent, x, y, text, attrs = {}) {
   t.textContent = text;
   return t;
 }
+// 圖表提示：手指點一下就一直顯示，點圖表以外的地方才收起來（滑鼠則是移開就收）
+const openTips = new Set();
+document.addEventListener('pointerdown', e => {
+  openTips.forEach(tp => { if (!tp.host.isConnected) openTips.delete(tp); else if (!tp.host.contains(e.target)) tp.close(); });
+}, true);
+const mouseOnly = fn => ev => { if (ev.pointerType === 'mouse') fn(); };
 function makeTip(host) {
   const t = document.createElement('div');
   t.className = 'tip'; host.appendChild(t);
-  return {
+  const tip = {
+    host, onClose: null,
     show(html, x, y) {
       t.innerHTML = html; t.style.opacity = 1;
       const w = t.offsetWidth, hw = host.clientWidth;
       let left = x - w / 2; left = Math.max(0, Math.min(hw - w, left));
       t.style.left = left + 'px'; t.style.top = Math.max(-8, y - t.offsetHeight - 12) + 'px';
+      openTips.add(tip);
     },
-    hide() { t.style.opacity = 0; }
+    hide() { t.style.opacity = 0; openTips.delete(tip); },
+    close() { if (tip.onClose) tip.onClose(); else tip.hide(); }
   };
+  return tip;
 }
 const tr = (k, v) => `<div class="tr"><span>${k}</span><span>${v}</span></div>`;
 // 只在資料端圓角、貼著基線的長條
@@ -654,7 +664,8 @@ function trendChart(host, pts) {
   const leave = () => { tip.hide(); cross.setAttribute('opacity', 0); dot.setAttribute('opacity', 0); };
   hit.addEventListener('pointermove', move);
   hit.addEventListener('pointerdown', move);
-  hit.addEventListener('pointerleave', leave);
+  hit.addEventListener('pointerleave', mouseOnly(leave));
+  tip.onClose = leave;
 }
 
 // 報酬率長條（正負兩側），rows: {label, pct, html}
@@ -681,7 +692,7 @@ function divergingChart(host, rows) {
     const show = () => tip.show(`<b>${esc(d.label)}</b>${d.html}`, (xa + xb) / 2, y + 4);
     hit.addEventListener('pointerenter', show);
     hit.addEventListener('pointerdown', show);
-    hit.addEventListener('pointerleave', () => tip.hide());
+    hit.addEventListener('pointerleave', mouseOnly(() => tip.hide()));
   });
 }
 
@@ -721,7 +732,7 @@ function columnChart(host, labels, series, opts = {}) {
     const show = () => tip.show(opts.tip(i), cx, Y(Math.max(...series.map(s => s.values[i] || 0))));
     hit.addEventListener('pointerenter', show);
     hit.addEventListener('pointerdown', show);
-    hit.addEventListener('pointerleave', () => tip.hide());
+    hit.addEventListener('pointerleave', mouseOnly(() => tip.hide()));
   });
 }
 
@@ -779,7 +790,7 @@ function hbarChart(host, rows) {
     const show = () => tip.show(`<b>${esc(r.label)}</b>${r.html}`, m.l + w / 2, y + 4);
     hit.addEventListener('pointerenter', show);
     hit.addEventListener('pointerdown', show);
-    hit.addEventListener('pointerleave', () => tip.hide());
+    hit.addEventListener('pointerleave', mouseOnly(() => tip.hide()));
   });
 }
 
@@ -1241,7 +1252,8 @@ function loanChart(host, l) {
   const leave = () => { tip.hide(); cross.setAttribute('opacity', 0); dot.setAttribute('opacity', 0); };
   hit.addEventListener('pointermove', move);
   hit.addEventListener('pointerdown', move);
-  hit.addEventListener('pointerleave', leave);
+  hit.addEventListener('pointerleave', mouseOnly(leave));
+  tip.onClose = leave;
 }
 
 function pageMilestone(d) {
