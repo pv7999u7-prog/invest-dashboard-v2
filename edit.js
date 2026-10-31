@@ -345,11 +345,11 @@ function formCareer(kind) {
     ye: { title: '年前分紅（農曆年前）', body: yearSel(last.year) + `<div class="row2">${fNum('allowance', '職務加給', '', '0')}${fNum('bonus', '年終（分紅）')}</div>` + hint('yeHint'),
       after: f => { f.querySelector('#yeHint').textContent = `合計 NT$${fmtN((nval(f, 'allowance') || 0) + (nval(f, 'bonus') || 0))}`; },
       submit: f => ['career', { op: 'ye', year: Number(val(f, 'year')), allowance: nval(f, 'allowance') || 0, bonus: req(nval(f, 'bonus'), '年終') }] },
-    // 調薪升遷：一個表單四種類型，只顯示該類型要填的欄位
-    //   年度調薪升遷：新增下一年度（op 'year'）；結構調薪、自訂項目：寫在那一年底下的新一列（op 'event'，結構調薪名稱自動是「11月結構調薪」）；
-    //   改職稱：改某一年的職稱（op 'title'）
+    // 調薪升遷：一個表單三種類型，只顯示該類型要填的欄位
+    //   年度調薪：新增下一年度，升遷時一起改職稱（op 'year'）；
+    //   結構調薪、自訂項目：寫在那一年底下的新一列（op 'event'，結構調薪名稱自動是「11月結構調薪」）
     raise: { title: '調薪升遷',
-      body: fSeg('type', [['year', '年度調薪'], ['struct', '結構調薪'], ['custom', '自訂項目'], ['title', '改職稱']], 'year') +
+      body: fSeg('type', [['year', '年度調薪'], ['struct', '結構調薪'], ['custom', '自訂項目']], 'year') +
         `<div id="rNew">${fNum('ny', '新年度', last.year + 1)}</div><div id="rPick">${yearSel(last.year)}</div>` +
         `<div id="rMonth">${fSelect('month', '月份', Array.from({ length: 12 }, (_, i) => [String(i + 1), (i + 1) + ' 月']), String(new Date().getMonth() + 1))}</div>` +
         `<div id="rLabel">${fText('label', '項目名稱', '', '例如 特別調薪、留任獎金')}</div>` +
@@ -358,7 +358,7 @@ function formCareer(kind) {
       after: f => {
         const t = val(f, 'type'), show = (id, on) => { f.querySelector(id).style.display = on ? '' : 'none'; };
         show('#rNew', t === 'year'); show('#rPick', t !== 'year'); show('#rMonth', t === 'struct'); show('#rLabel', t === 'custom');
-        show('#rSal', t !== 'title'); show('#rTitle', t === 'year' || t === 'title');
+        show('#rTitle', t === 'year');
         const s = nval(f, 'salary');
         f.querySelector('#rsHint').textContent = (t === 'custom' ? '沒有調薪可以空白。' : '') +
           (s && last.salary ? `月薪 ${s - last.salary >= 0 ? '+' : ''}${fmtN(s - last.salary)}（${((s / last.salary - 1) * 100).toFixed(1)}%）` : '');
@@ -366,10 +366,6 @@ function formCareer(kind) {
       submit: f => {
         const t = val(f, 'type'), sal = nval(f, 'salary'), promoted = val(f, 'promoted') === '1';
         if (t === 'year') return ['career', { op: 'year', year: req(nval(f, 'ny'), '新年度'), salary: req(sal, '調整後月薪'), promoted, title: val(f, 'title') }];
-        if (t === 'title') {
-          if (!val(f, 'title')) throw new Error('請填職稱');
-          return ['career', { op: 'title', year: Number(val(f, 'year')), title: val(f, 'title'), promoted }];
-        }
         const label = t === 'struct' ? `${val(f, 'month')}月結構調薪` : val(f, 'label');
         if (!label) throw new Error('請填項目名稱');
         if (t === 'struct' && !sal) throw new Error('請填調整後月薪');
