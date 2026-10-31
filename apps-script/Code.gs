@@ -8,7 +8,7 @@
 const KEY = '請改成你自己的密碼';
 
 // 程式碼版本（App 設定頁會顯示，用來確認部署的是不是最新版；這行不用改）
-const SCRIPT_VERSION = 12;
+const SCRIPT_VERSION = 13;
 
 // 要讀的工作表與範圍（試算表版面有大改時，才需要調整這裡）
 const RANGES = {
@@ -222,7 +222,7 @@ const ACTIONS = {
     const s = sh('House');
     if (p.base) s.getRange(r.row, 2).setValue(toDate(p.base));
     if (p.balance != null && p.balance !== '') s.getRange(r.row, 3).setValue(num(p.balance));
-    if (p.rate != null && p.rate !== '') s.getRange(r.row, 4).setValue(num(p.rate) / 100).setNumberFormat('0.00%');
+    if (p.rate != null && p.rate !== '') fmtCell(s.getRange(r.row, 4).setValue(num(p.rate) / 100), '0.00%');
     if (p.pmt != null && p.pmt !== '') s.getRange(r.row, 5).setValue(num(p.pmt));
     if (p.day) s.getRange(r.row, 6).setValue(num(p.day));
     if (p.end) s.getRange(r.row, 7).setValue(toDate(p.end));
@@ -274,14 +274,14 @@ const ACTIONS = {
       const vals = s.getRange('A1:B300').getValues();
       let r = vals.length; while (r > 0 && vals[r - 1][0] === '' && vals[r - 1][1] === '') r--;
       // 日期欄存成文字（例如 20261105），避免被當成數字或日期改掉格式
-      s.getRange(r + 1, 1).setNumberFormat('@').setValue(need(p.date, '日期', true));
+      fmtCell(s.getRange(r + 1, 1), '@').setValue(need(p.date, '日期', true));
       s.getRange(r + 1, 2).setValue(need(p.text, '內容', true));
       return '已新增里程碑';
     }
     const row = num(p.row);
     if (!(row >= 1)) throw new Error('找不到這個里程碑');
     if (p.op === 'del') { s.deleteRow(row); return '已刪除里程碑'; }
-    s.getRange(row, 1).setNumberFormat('@').setValue(String(need(p.date, '日期', true)));
+    fmtCell(s.getRange(row, 1), '@').setValue(String(need(p.date, '日期', true)));
     s.getRange(row, 2).setValue(need(p.text, '內容', true));
     return '已更新里程碑';
   },
@@ -392,11 +392,17 @@ function appendRow(s, last, c1, n, values) {
   s.insertRowBefore(last);
   s.getRange(last + 1, c1, 1, n).copyTo(s.getRange(last, c1, 1, n));
   const row = last + 1;
-  Object.keys(values).forEach(c => {
-    const v = values[c], cell = s.getRange(row, Number(c));
-    if (v instanceof Date) cell.setValue(v).setNumberFormat('yyyy/mm/dd');
-    else cell.setValue(v);
-  });
+  try {
+    Object.keys(values).forEach(c => {
+      const v = values[c], cell = s.getRange(row, Number(c));
+      if (v instanceof Date) fmtCell(cell.setValue(v), 'yyyy/mm/dd');
+      else cell.setValue(v);
+    });
+  } catch (err) {
+    // 寫到一半失敗：把剛插入的那一列拿掉，不留半套資料
+    s.deleteRow(row);
+    throw err;
+  }
   return row;
 }
 
@@ -442,13 +448,13 @@ function usHoldings(broker) {
 // 新的台股：Price 分頁加一列抓價格，持股清單加一列（公式照上一列）
 function addTwHolding(st, price) {
   const p = sh('Price'), pr = firstEmpty(p, 'A', 2);
-  p.getRange(pr, 1, 1, 2).setNumberFormat('@').setValues([[st.code, st.name]]);
+  fmtCell(p.getRange(pr, 1, 1, 2), '@').setValues([[st.code, st.name]]);
   p.getRange(pr, 3).setFormula(`=IFERROR(GOOGLEFINANCE("TPE:"&A${pr}),IFERROR(VALUE(IMPORTXML("https://tw.stock.yahoo.com/quote/"&A${pr}&".TWO","//span[contains(@class,'Fz(32px)')]")),""))`);
   const s = sh('台股'), list = holdings(s), last = list[list.length - 1].row;
   s.insertRowBefore(last);
   s.getRange(last + 1, 9, 1, 9).copyTo(s.getRange(last, 9, 1, 9));
   const row = last + 1;
-  s.getRange(row, 9, 1, 2).setNumberFormat('@').setValues([[st.code, st.name]]);
+  fmtCell(s.getRange(row, 9, 1, 2), '@').setValues([[st.code, st.name]]);
   s.getRange(row, 14).setFormula(`=Price!C${pr}`);
   s.getRange(row, 15).setValue(price);
   SpreadsheetApp.flush();
@@ -619,7 +625,7 @@ function cryptoTrade(p, date, price, qty, buy, amt) {
 // 加密貨幣分頁 Y～AF 欄的交易紀錄（L～U 欄是原本的已兌現表和備註，不要動）
 function cryptoLog(date, type, coin, where, price, qty, usdt, note) {
   const s = sh(CRYPTO), row = firstEmpty(s, 'Y', 2);
-  s.getRange(row, 25).setValue(date).setNumberFormat('yyyy/mm/dd');
+  fmtCell(s.getRange(row, 25).setValue(date), 'yyyy/mm/dd');
   s.getRange(row, 26, 1, 7).setValues([[type, coin, where, price, qty, round2(usdt), note]]);
 }
 
@@ -680,6 +686,12 @@ function setAvg(cell, avg, held, price, qty) {
 function addTo(cell, delta) {
   if (cell.getFormula()) return;
   cell.setValue(round2((num(cell.getValue()) || 0) + delta));
+}
+
+// 設定數字格式；Google 表格（Table）裡有指定類型的欄位不准改格式，那種欄位本來就會自動套格式，略過即可
+function fmtCell(range, f) {
+  try { range.setNumberFormat(f); } catch (err) {}
+  return range;
 }
 
 function firstEmpty(s, col, from) {
