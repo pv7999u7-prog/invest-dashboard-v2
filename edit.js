@@ -99,23 +99,25 @@ function formCost() {
       fNum('total', '總金額（台幣）', '', '例如 400000') +
       `<div class="grp">分配到哪裡</div>` + fNum('tw', '台股（台幣）', '', '0') +
       `<div class="row2">${fNum('cube', '美股 CUBE（美金）', '', '0')}${fNum('ft', '美股 Firstrade（美金）', '', '0')}</div>` +
+      fNum('crypto', '加密貨幣（USDT）', '', '0') +
       hint('costHint') + fText('note', '備註', '', '例如 7.5W入台股'),
     after(f) {
-      const t = nval(f, 'total') || 0, tw = nval(f, 'tw') || 0, usd = (nval(f, 'cube') || 0) + (nval(f, 'ft') || 0);
+      const t = nval(f, 'total') || 0, tw = nval(f, 'tw') || 0, usd = (nval(f, 'cube') || 0) + (nval(f, 'ft') || 0) + (nval(f, 'crypto') || 0);
       const rest = t - tw - usd * (e.fx || 0);
       f.querySelector('#costHint').innerHTML = t ? `美金以匯率 ${fmtN(e.fx, 2)} 換算約 NT$${fmtN(usd * e.fx)}；` +
-        (Math.abs(rest) < 1000 ? '已全部分配。' : `其餘 NT$${fmtN(rest)} 只記在總成本（例如虛擬幣）。`) : '';
+        (Math.abs(rest) < 1000 ? '已全部分配。' : `其餘 NT$${fmtN(rest)} 只記在總成本。`) : '';
     },
     submit(f) {
       const s = val(f, 'dir') === 'out' ? -1 : 1, t = req(nval(f, 'total'), '總金額');
       return ['cost', { date: slash(val(f, 'date')), total: s * t, tw: s * (nval(f, 'tw') || 0),
-        us: [{ broker: 'CUBE', usd: s * (nval(f, 'cube') || 0) }, { broker: 'Firstrade', usd: s * (nval(f, 'ft') || 0) }], note: val(f, 'note') }];
+        us: [{ broker: 'CUBE', usd: s * (nval(f, 'cube') || 0) }, { broker: 'Firstrade', usd: s * (nval(f, 'ft') || 0) }], crypto: s * (nval(f, 'crypto') || 0), note: val(f, 'note') }];
     }
   });
 }
 
 /* ---------- 2. 個股買賣 ---------- */
 function formTrade(market) {
+  if (market === 'crypto') return formCryptoTrade();
   const e = ed(), tw = market === 'tw';
   const brokers = Object.keys(e.us.brokers);
   const list = tw ? e.tw.holdings.map(h => `<option value="${esc(h.code)}">${esc(h.name)}</option>`)
@@ -144,6 +146,63 @@ function formTrade(market) {
       if (!val(f, 'stock')) throw new Error(tw ? '請填股號或股名' : '請填代號');
       return ['trade', { market, broker: tw ? '' : val(f, 'broker'), date: slash(val(f, 'date')), side: val(f, 'side'), stock: val(f, 'stock'),
         price: req(nval(f, 'price'), '成交單價'), qty: req(nval(f, 'qty'), '股數'), note: val(f, 'note') }];
+    }
+  });
+}
+
+/* ---------- 2b. 加密貨幣買賣、出入金（閒置現金＝Binance 的 USDT） ---------- */
+function formCryptoTrade() {
+  const e = ed(), c = e.crypto, coins = c.coins.filter(x => x.name !== 'USDT');
+  const wheres = [...new Set(['Binance'].concat(c.coins.map(x => x.where)))];
+  openSheet({
+    title: '加密貨幣買賣',
+    body: fSeg('side', [['buy', '買進'], ['sell', '賣出']], 'buy') + fDate('date', '日期') +
+      `<div class="row2">${fText('coin', '幣名', '', '例如 BTC', 'coinList')}${fSelect('where', '存於', wheres.map(w => [w, w]), 'Binance')}</div>` +
+      `<datalist id="coinList">${[...new Set(coins.map(x => x.name))].map(n => `<option value="${esc(n)}">`).join('')}</datalist>` +
+      `<div class="row2">${fNum('price', '成交單價（USD）', '', '例如 77000')}${fNum('qty', '顆數', '', '例如 0.05')}</div>` +
+      hint('ctHint') + fText('note', '備註'),
+    after(f) {
+      const p = nval(f, 'price') || 0, q = nval(f, 'qty') || 0, buy = val(f, 'side') === 'buy', amt = p * q;
+      const coin = val(f, 'coin').toUpperCase(), h = coins.find(x => x.name === coin && x.where === val(f, 'where'));
+      const m = n => (n < 0 ? '−' : '') + fmtN(Math.abs(n), 2);
+      let s = amt ? `金額 ${m(amt)} USDT・USDT ${m(c.cash)} → <b>${m(c.cash + (buy ? -amt : amt))}</b>` : `USDT 餘額 ${m(c.cash)}`;
+      if (h) s += `<br>${esc(h.where)} 目前 ${fmtN(h.qty, 8)} 顆` + (q ? ` → ${fmtN(h.qty + (buy ? q : -q), 8)} 顆` : '');
+      else if (coin && buy) s += '<br>新的幣或存放位置：會自動加進持有清單';
+      f.querySelector('#ctHint').innerHTML = s;
+    },
+    submit(f) {
+      if (!val(f, 'coin')) throw new Error('請填幣名');
+      return ['trade', { market: 'crypto', broker: val(f, 'where'), date: slash(val(f, 'date')), side: val(f, 'side'), stock: val(f, 'coin'),
+        price: req(nval(f, 'price'), '成交單價'), qty: req(nval(f, 'qty'), '顆數'), note: val(f, 'note') }];
+    }
+  });
+}
+
+function formCryptoFlow() {
+  const e = ed(), c = e.crypto;
+  const srcs = [['fiat', '台幣（新資金／提現）'], ['tw', '台股帳戶'], ...Object.keys(e.us.brokers).map(b => [b, '美股 ' + b])];
+  openSheet({
+    title: '加密貨幣出入金',
+    body: fSeg('dir', [['in', '轉入加密貨幣'], ['out', '轉出加密貨幣']], 'in') + fDate('date', '日期') +
+      fSelect('source', '資金來源／去處', srcs, 'fiat') +
+      `<div class="row2">${fNum('usdt', 'USDT 數量', '', '例如 3000')}<div id="ntdBox">${fNum('ntd', '台幣金額', '', '例如 98000')}</div></div>` +
+      hint('cfHint') + fText('note', '備註'),
+    after(f) {
+      const src = val(f, 'source'), twd = src === 'fiat' || src === 'tw', u = nval(f, 'usdt') || 0, out = val(f, 'dir') === 'out';
+      f.querySelector('#ntdBox').style.visibility = twd ? '' : 'hidden';
+      const m = n => (n < 0 ? '−' : '') + fmtN(Math.abs(n), 2);
+      let s = `USDT ${m(c.cash)}` + (u ? ` → <b>${m(c.cash + (out ? -u : u))}</b>` : '');
+      if (src === 'fiat') s += '<br>算新的投入／撤出：會記在 Total Overall 的總成本';
+      else if (src === 'tw') s += `<br>內部轉帳：台股閒置現金 NT$${fmtN(e.tw.cash)} 會${out ? '增加' : '減少'}，總成本不變`;
+      else { const b = e.us.brokers[src]; s += `<br>內部轉帳：${src} 閒置現金 US$${fmtN(b.cash, 2)} → ${fmtN(b.cash + (out ? u : -u), 2)}（1 USDT 以 1 USD 計），總成本不變`; }
+      const ntd = nval(f, 'ntd');
+      if (twd && u && ntd) s += `<br>換算匯率約 ${fmtN(ntd / u, 2)}`;
+      f.querySelector('#cfHint').innerHTML = s;
+    },
+    submit(f) {
+      const src = val(f, 'source'), twd = src === 'fiat' || src === 'tw';
+      return ['cryptoFlow', { date: slash(val(f, 'date')), dir: val(f, 'dir'), source: src, usdt: req(nval(f, 'usdt'), 'USDT 數量'),
+        ntd: twd ? req(nval(f, 'ntd'), '台幣金額') : '', note: val(f, 'note') }];
     }
   });
 }
@@ -227,6 +286,22 @@ function formLoan(name) {
   });
 }
 
+/* ---------- 6b. 房產估價 ---------- */
+function formHouse(name) {
+  const x = (state.data.house || []).find(h => h.name === name);
+  if (!x) return;
+  openSheet({
+    title: `${esc(name)}・估價`,
+    body: `<p class="hint">估值＝房屋坪數 ${fmtN(x.housePing, 2)} 坪 × 估計單價 ＋ 估計車位價</p>` +
+      `<div class="row2">${fNum('unit', '估計單價（萬/坪）', x.estUnit)}${fNum('park', `車位估價（萬，${x.parkN || 0} 個）`, x.estPark)}</div>` + hint('hsHint'),
+    after(f) {
+      const u = nval(f, 'unit'), p = nval(f, 'park') || 0;
+      f.querySelector('#hsHint').innerHTML = u != null ? `估計現值 <b>${fmtN(x.housePing * u + p)} 萬</b>（目前 ${fmtN(x.est)} 萬，購入 ${fmtN(x.price)} 萬）` : '';
+    },
+    submit: f => ['house', { name, unit: req(nval(f, 'unit'), '估計單價'), park: nval(f, 'park') == null ? '' : nval(f, 'park') }]
+  });
+}
+
 /* ---------- 7. 里程碑 ---------- */
 function formMilestone(row) {
   const m = row ? ed().milestones.find(x => x.row === Number(row)) : null;
@@ -263,7 +338,7 @@ function formCareer(kind) {
 }
 
 /* ---------- 綁定 ---------- */
-const FORMS = { cost: formCost, trade: formTrade, dca: formDca, plan: formPlan, expense: formExpense, loan: formLoan, milestone: formMilestone, career: formCareer };
+const FORMS = { cost: formCost, trade: formTrade, cryptoFlow: formCryptoFlow, dca: formDca, plan: formPlan, expense: formExpense, loan: formLoan, house: formHouse, milestone: formMilestone, career: formCareer };
 
 function bindEdit() {
   document.querySelectorAll('[data-form]').forEach(el => el.addEventListener('click', ev => {

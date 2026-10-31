@@ -4,8 +4,8 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '2.0.0';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
-const LATEST_SCRIPT = 10;   // 最新 Code.gs 的 SCRIPT_VERSION
+const APP_VERSION = '2.1.0';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const LATEST_SCRIPT = 11;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
 
@@ -935,7 +935,7 @@ function pageCrypto(d) {
   c.coins.forEach(x => { (groups[x.name] = groups[x.name] || { name: x.name, qty: 0, usd: 0, value: 0, price: x.price, where: [] }); const g = groups[x.name]; g.qty += x.qty; g.usd += x.usd || 0; g.value += x.value || 0; g.where.push(x.where); });
   const gl = Object.values(groups).sort((a, b) => b.value - a.value);
   const colors = { BTC: '--s4', ETH: '--s7', SOL: '--s3', DOGE: '--s2' };
-  let h = `<h1 class="title">加密貨幣</h1>
+  let h = `${head('加密貨幣', [['＋ 買賣', 'trade', 'crypto'], ['＋ 出入金', 'cryptoFlow']])}
   <div class="card hero">
     <div class="lbl">加密貨幣總值</div>
     <div class="big">${ntd(c.total)}</div>
@@ -1168,7 +1168,7 @@ function pageHouse(d) {
     ${chart('c-house', el => columnChart(el, list.map(x => x.name), [{ name: '購入', color: '--axis', values: list.map(x => x.price) }, { name: '估值', color: '--s6', values: list.map(x => x.est) }],
       { axis: v => dec(v, 0), maxBar: 44, height: 200, tip: i => { const x = list[i]; return `<b>${esc(x.name)}</b>${tr('購入', hidden ? MASK : int(x.price) + ' 萬')}${tr('估計', hidden ? MASK : int(x.est) + ' 萬')}`; } }))}</div>`;
   list.forEach(x => {
-    h += `<div class="card"><h3>${esc(x.name)}</h3><p class="cap">${esc(x.date)} 購入</p>
+    h += `<div class="card"><div class="hrow"><h3>${esc(x.name)}</h3>${ed() ? `<button class="act" data-form="house" data-arg="${esc(x.name)}">調整估價</button>` : ''}</div><p class="cap">${esc(x.date)} 購入</p>
       <div class="kv"><span>購入總價</span><span>${hidden ? MASK : int(x.price) + ' 萬'}</span></div>
       <div class="kv"><span>坪數（房屋）</span><span>${x.ping}（${x.housePing}）坪</span></div>
       <div class="kv"><span>車位</span><span>${x.parkN || 0} 個</span></div>

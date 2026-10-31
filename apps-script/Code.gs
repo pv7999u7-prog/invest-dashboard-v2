@@ -8,14 +8,14 @@
 const KEY = '請改成你自己的密碼';
 
 // 程式碼版本（App 設定頁會顯示，用來確認部署的是不是最新版；這行不用改）
-const SCRIPT_VERSION = 10;
+const SCRIPT_VERSION = 11;
 
 // 要讀的工作表與範圍（試算表版面有大改時，才需要調整這裡）
 const RANGES = {
   total:     ['Total Overall', 'A1:Z300'],
   tw:        ['台股', 'A1:Q400'],
   us:        ['美股', 'A1:Q600'],
-  crypto:    ['幣 ', 'A1:N40'],
+  crypto:    ['幣 ', 'A1:N60'],
   myDca:     ['My 定期定額 (台幣帳戶)', 'A1:J40'],
   kidsUs:    ['橙&澈 美股', 'A1:J60'],
   kidsTw:    ['橙&澈 定期定額台股', 'A1:J80'],
@@ -28,6 +28,8 @@ const RANGES = {
 
 const LOG_SHEET = 'App 紀錄';
 const BROKERS = { CUBE: 3, Firstrade: 4 };   // 美股分頁：券商 → 摘要列（C 欄是現金）
+const CRYPTO = '幣 ';                          // 加密貨幣分頁（名稱後面有一個空白）
+const CRYPTO_CASH = ['USDT', 'Binance'];        // 加密貨幣的閒置現金：Binance 上的 USDT
 // 固定支出：1～6 月的項目在第 2～8 列，7～12 月在第 10～17 列；每個月兩欄（項目、金額）
 const EXP_BLOCKS = [{ months: [1, 2, 3, 4, 5, 6], from: 2, to: 8 }, { months: [7, 8, 9, 10, 11, 12], from: 10, to: 17 }];
 
@@ -105,6 +107,8 @@ function editInfo() {
   info.plan = planInfo();
   info.loans = loanRows();
   info.career = careerInfo();
+  info.crypto = { coins: cryptoRows(), cash: cryptoCash().qty };
+  info.house = houseRows();
   return info;
 }
 
@@ -128,6 +132,11 @@ const ACTIONS = {
       appendRow(us, last, 1, 10, { 1: date, 2: u.broker, 3: -num(u.usd), 4: '', 5: '', 6: '', 7: '', 8: '', 9: '', 10: note });
       addTo(us.getRange('C' + BROKERS[u.broker]), num(u.usd));
     });
+    if (num(p.crypto)) {
+      const c = cryptoCash();
+      addTo(sh(CRYPTO).getRange(c.row, 3), num(p.crypto));
+      cryptoLog(date, num(p.crypto) > 0 ? '入金（台幣）' : '出金（台幣）', 'USDT', CRYPTO_CASH[1], '', '', num(p.crypto), note);
+    }
     return `已記錄${total >= 0 ? '投入' : '撤出'} ${fmt(Math.abs(total))}`;
   },
 
@@ -147,6 +156,7 @@ const ACTIONS = {
       addTo(s.getRange('C3'), buy ? -amt : amt);
       return `已記錄台股${buy ? '買進' : '賣出'} ${st.name} ${qty} 股`;
     }
+    if (p.market === 'crypto') return cryptoTrade(p, date, price, qty, buy, amt);
     const broker = p.broker;
     if (!BROKERS[broker]) throw new Error('請選券商');
     const s = sh('美股'), code = String(p.stock || '').trim().toUpperCase();
@@ -217,6 +227,44 @@ const ACTIONS = {
     if (p.day) s.getRange(r.row, 6).setValue(num(p.day));
     if (p.end) s.getRange(r.row, 7).setValue(toDate(p.end));
     return '已更新房貸';
+  },
+
+  // 房產估價：unit 估計單價（萬/坪）、park 估計車位價（萬）
+  house(p) {
+    const r = houseRows().find(x => x.name === p.name);
+    if (!r) throw new Error('找不到房產：' + p.name);
+    const s = sh('House');
+    s.getRange(r.row, 12).setValue(need(p.unit, '估計單價'));
+    if (p.park != null && p.park !== '') s.getRange(r.row, 11).setValue(num(p.park));
+    return `已更新 ${p.name} 估價`;
+  },
+
+  // 加密貨幣出入金：dir 'in' 轉進加密貨幣、'out' 轉出；source 'fiat'（台幣新資金）、'tw'（台股）、'CUBE'／'Firstrade'（美股）
+  // usdt 是加密貨幣這邊增減的 USDT；ntd 是台幣那邊的金額（台幣、台股才需要）
+  cryptoFlow(p) {
+    const date = toDate(p.date), sign = p.dir === 'out' ? -1 : 1, usdt = need(p.usdt, 'USDT 數量');
+    if (usdt <= 0) throw new Error('USDT 數量要大於 0');
+    const c = cryptoCash(), inOut = sign > 0 ? '轉入' : '轉出';
+    if (sign < 0 && usdt > c.qty + 1e-9) throw new Error(`USDT 只有 ${c.qty}，不能轉出 ${usdt}`);
+    let label;
+    if (p.source === 'fiat') {
+      const ntd = need(p.ntd, '台幣金額');
+      appendTotalOverall(date, -sign * ntd, p.note || (sign > 0 ? '加密貨幣入金' : '加密貨幣出金'));
+      label = sign > 0 ? '入金（台幣）' : '出金（台幣）';
+    } else if (p.source === 'tw') {
+      const ntd = need(p.ntd, '台幣金額'), tw = sh('台股'), last = lastRowOf(tw, 'A', '日期');
+      appendRow(tw, last, 1, 10, { 1: date, 2: '', 3: sign * ntd, 4: '', 5: '', 6: '', 7: '', 8: '', 9: '', 10: p.note || (sign > 0 ? '轉到加密貨幣' : '從加密貨幣轉回') });
+      addTo(tw.getRange('C3'), -sign * ntd);
+      label = '台股' + inOut;
+    } else if (BROKERS[p.source]) {
+      const us = sh('美股'), last = lastRowOf(us, 'A', '日期');
+      appendRow(us, last, 1, 10, { 1: date, 2: p.source, 3: sign * usdt, 4: '', 5: '', 6: '', 7: '', 8: '', 9: '', 10: p.note || (sign > 0 ? '轉到加密貨幣' : '從加密貨幣轉回') });
+      addTo(us.getRange('C' + BROKERS[p.source]), -sign * usdt);
+      label = p.source + inOut;
+    } else throw new Error('請選資金來源');
+    addTo(sh(CRYPTO).getRange(c.row, 3), sign * usdt);
+    cryptoLog(date, label, 'USDT', CRYPTO_CASH[1], '', '', sign * usdt, p.note || '');
+    return `已記錄加密貨幣${sign > 0 ? '轉入' : '轉出'} ${usdt} USDT`;
   },
 
   // 里程碑：op 'add'（加在最後）、'set'（改）、'del'（刪除）
@@ -517,6 +565,67 @@ function careerInfo() {
     }
   });
   return { years };
+}
+
+// 加密貨幣分頁：第 4 列起 A 幣名 B 存於 C 顆數（手打）D 現價 E 總價USD F 總價NTD
+function cryptoRows() {
+  const vals = sh(CRYPTO).getRange('A4:C200').getValues(), out = [];
+  vals.forEach((r, i) => { if (String(r[0]).trim()) out.push({ row: i + 4, name: normCode(r[0]), where: String(r[1]).trim(), qty: num(r[2]) || 0 }); });
+  return out;
+}
+
+function cryptoCash() {
+  const hit = cryptoRows().find(x => x.name === CRYPTO_CASH[0] && x.where === CRYPTO_CASH[1]);
+  return hit || addCryptoRow(CRYPTO_CASH[0], CRYPTO_CASH[1], null);
+}
+
+// 新的幣（或新的存放位置）：持有清單加一列；價格接 Price 分頁 H/I 欄（沒有的幣先寫成交價）
+function addCryptoRow(coin, where, price) {
+  const s = sh(CRYPTO), row = firstEmpty(s, 'A', 4);
+  let priceCell = 1;
+  if (coin !== CRYPTO_CASH[0]) {
+    const p = sh('Price');
+    let pr = p.getRange('H2:H100').getValues().findIndex(r => normCode(r[0]) === coin) + 2;
+    if (pr < 2) { pr = firstEmpty(p, 'H', 2); p.getRange(pr, 8, 1, 2).setValues([[coin, price]]); }
+    priceCell = `=Price!I${pr}`;
+  }
+  s.getRange(row, 1, 1, 3).setValues([[coin, where, 0]]);
+  s.getRange(row, 4).setValue(priceCell);
+  s.getRange(row, 5).setFormula(`=D${row}*C${row}`);
+  s.getRange(row, 6).setFormula(`=E${row}*$J$2`);
+  SpreadsheetApp.flush();
+  return { row, name: coin, where, qty: 0 };
+}
+
+// 加密貨幣買賣：用 Binance 的 USDT 付款／收款
+function cryptoTrade(p, date, price, qty, buy, amt) {
+  const coin = normCode(p.stock || ''), where = String(p.broker || CRYPTO_CASH[1]).trim();
+  if (!/^[A-Z0-9]{2,10}$/.test(coin)) throw new Error('請輸入幣名，例如 BTC');
+  if (coin === CRYPTO_CASH[0]) throw new Error('USDT 請用「出入金」');
+  const s = sh(CRYPTO), cash = cryptoCash();
+  let h = cryptoRows().find(x => x.name === coin && x.where === where);
+  if (!h) { if (!buy) throw new Error(`${where} 沒有 ${coin}`); h = addCryptoRow(coin, where, price); }
+  if (!buy && qty > h.qty + 1e-12) throw new Error(`${where} 的 ${coin} 只有 ${h.qty} 顆，不能賣 ${qty} 顆`);
+  s.getRange(h.row, 3).setValue(Math.round((h.qty + (buy ? qty : -qty)) * 1e8) / 1e8);
+  addTo(s.getRange(cash.row, 3), buy ? -amt : amt);
+  cryptoLog(date, buy ? '買進' : '賣出', coin, where, price, qty, buy ? -amt : amt, p.note || '');
+  return `已記錄加密貨幣${buy ? '買進' : '賣出'} ${coin} ${qty} 顆`;
+}
+
+// 加密貨幣分頁 P～W 欄的交易紀錄
+function cryptoLog(date, type, coin, where, price, qty, usdt, note) {
+  const s = sh(CRYPTO), row = firstEmpty(s, 'P', 2);
+  s.getRange(row, 16).setValue(date).setNumberFormat('yyyy/mm/dd');
+  s.getRange(row, 17, 1, 7).setValues([[type, coin, where, price, qty, round2(usdt), note]]);
+}
+
+// House 上半部的房產列（「房貸」那列以前）：A 名稱 K 估計車位（萬）L 估計單價（萬/坪）
+function houseRows() {
+  const vals = sh('House').getRange('A1:L20').getValues(), out = [];
+  for (let i = 2; i < vals.length && String(vals[i][0]).trim() !== '房貸'; i++) {
+    if (String(vals[i][0]).trim()) out.push({ row: i + 1, name: String(vals[i][0]).trim(), unit: num(vals[i][11]), park: num(vals[i][10]) });
+  }
+  return out;
 }
 
 /* ================================================================
