@@ -4,7 +4,7 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '2.5.2';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const APP_VERSION = '2.5.3';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
 const LATEST_SCRIPT = 18;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
@@ -144,7 +144,8 @@ function parseTw(rows) {
   out.tx = [];
   const t = findRow(rows, 0, '日期');
   if (t >= 0) {
-    for (let r = t + 1; r < rows.length; r++) {
+    // 交易表到第一個空白列為止；下面那列「今天」的總結（A 是 TODAY()、C 是台股總值）不是交易
+    for (let r = t + 1; r < rows.length && str(rows[r][0]) !== ''; r++) {
       const x = rows[r];
       if (!isDate(x[0])) continue;
       out.tx.push({ row: r + 1, date: normDate(x[0]), name: str(x[1]), flow: num(x[2]), code: str(x[3]), price: num(x[4]), buy: num(x[5]), sell: num(x[6]), note: str(x[9]) });
