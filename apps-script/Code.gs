@@ -8,7 +8,7 @@
 const KEY = '請改成你自己的密碼';
 
 // 程式碼版本（App 設定頁會顯示，用來確認部署的是不是最新版；這行不用改）
-const SCRIPT_VERSION = 11;
+const SCRIPT_VERSION = 12;
 
 // 要讀的工作表與範圍（試算表版面有大改時，才需要調整這裡）
 const RANGES = {
@@ -43,6 +43,8 @@ function doPost(e) {
     return json({ ok: false, error: 'unauthorized' });
   }
   ensureTrigger();
+  try { ensurePriceTrigger(); } catch (err) {}
+  refreshCryptoPricesIfStale();
   if (body.action) {
     const lock = LockService.getScriptLock();
     lock.waitLock(20000);
@@ -699,4 +701,41 @@ function now() {
 
 function json(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}
+
+/* ================================================================
+   幣價：從 Kraken 抓 Price 分頁 H 欄每個幣的美元價格，寫到 I 欄
+   每小時自動跑一次；App 打開時如果超過 10 分鐘沒更新，也會先更新再回傳
+   （取代原本 KRAKEN 檔的 updatePrices，舊的定時觸發會換成這個）
+   ================================================================ */
+function refreshCryptoPrices() {
+  const s = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Price');
+  if (!s) return;
+  const coins = s.getRange('H2:H40').getValues().map(r => String(r[0]).trim().toUpperCase());
+  const list = coins.map((c, i) => ({ c, row: i + 2 })).filter(x => x.c && x.c !== 'USDT' && x.c !== 'USDC');
+  if (!list.length) return;
+  const res = UrlFetchApp.fetchAll(list.map(x => ({ url: 'https://api.kraken.com/0/public/Ticker?pair=' + x.c + 'USD', muteHttpExceptions: true })));
+  res.forEach((r, i) => {
+    try {
+      const j = JSON.parse(r.getContentText()), k = j.result && Object.keys(j.result)[0];
+      const price = k ? parseFloat(j.result[k].c[0]) : NaN;
+      if (price > 0) s.getRange(list[i].row, 9).setValue(price);   // 抓不到的幣（Kraken 沒有）保留原本的價格
+    } catch (err) {}
+  });
+  PropertiesService.getScriptProperties().setProperty('price-at', String(Date.now()));
+}
+
+function refreshCryptoPricesIfStale() {
+  const at = Number(PropertiesService.getScriptProperties().getProperty('price-at') || 0);
+  if (Date.now() - at < 10 * 60 * 1000) return;
+  try { refreshCryptoPrices(); SpreadsheetApp.flush(); } catch (err) {}
+}
+
+// 每小時更新幣價的定時觸發：只建立一次；原本 KRAKEN 檔 updatePrices 的觸發一併換掉，避免兩個同時寫
+function ensurePriceTrigger() {
+  const props = PropertiesService.getScriptProperties();
+  if (props.getProperty('price-trigger-v1')) return;
+  ScriptApp.getProjectTriggers().filter(t => ['updatePrices', 'refreshCryptoPrices'].indexOf(t.getHandlerFunction()) >= 0).forEach(t => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger('refreshCryptoPrices').timeBased().everyHours(1).create();
+  props.setProperty('price-trigger-v1', '1');
 }
