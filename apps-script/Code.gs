@@ -8,7 +8,7 @@
 const KEY = '請改成你自己的密碼';
 
 // 程式碼版本（App 設定頁會顯示，用來確認部署的是不是最新版；這行不用改）
-const SCRIPT_VERSION = 13;
+const SCRIPT_VERSION = 14;
 
 // 要讀的工作表與範圍（試算表版面有大改時，才需要調整這裡）
 const RANGES = {
@@ -388,19 +388,25 @@ function appendTotalOverall(date, flow, note) {
 
 // 在表格最後一列之後加一列。為了讓 Google 表格（Table）自動延伸，先在最後一列「之前」插入，
 // 再把原本最後一列搬回去，新資料寫在真正的最後一列。values 用欄號（1 起算）指定要寫的格子。
+// 注意：表格裡有指定類型的欄位（例如日期欄）不准改數字格式，所以這裡只複製內容、不碰格式，
+// 日期欄會自動套用表格的日期格式。寫入失敗時把插入的列刪掉，不留半套資料。
 function appendRow(s, last, c1, n, values) {
   s.insertRowBefore(last);
-  s.getRange(last + 1, c1, 1, n).copyTo(s.getRange(last, c1, 1, n));
   const row = last + 1;
+  // 第一步：把原本的最後一列搬到插入的空白列（失敗就刪掉那列空白列，原本的資料沒動）
   try {
-    Object.keys(values).forEach(c => {
-      const v = values[c], cell = s.getRange(row, Number(c));
-      if (v instanceof Date) fmtCell(cell.setValue(v), 'yyyy/mm/dd');
-      else cell.setValue(v);
-    });
+    s.getRange(row, c1, 1, n).copyTo(s.getRange(last, c1, 1, n), { contentsOnly: true });
+    SpreadsheetApp.flush();   // 讓試算表現在就回報錯誤，才能在這裡還原
   } catch (err) {
-    // 寫到一半失敗：把剛插入的那一列拿掉，不留半套資料
-    s.deleteRow(row);
+    try { s.deleteRow(last); } catch (e) {}
+    throw err;
+  }
+  // 第二步：新資料寫在真正的最後一列（失敗就刪掉這一列，原本的最後一列已經在上一列）
+  try {
+    Object.keys(values).forEach(c => s.getRange(row, Number(c)).setValue(values[c]));
+    SpreadsheetApp.flush();
+  } catch (err) {
+    try { s.deleteRow(row); } catch (e) {}
     throw err;
   }
   return row;
