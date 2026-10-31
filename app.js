@@ -4,8 +4,8 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '2.1.8';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
-const LATEST_SCRIPT = 14;   // 最新 Code.gs 的 SCRIPT_VERSION
+const APP_VERSION = '2.2.0';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const LATEST_SCRIPT = 15;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
 
@@ -147,7 +147,7 @@ function parseTw(rows) {
     for (let r = t + 1; r < rows.length; r++) {
       const x = rows[r];
       if (!isDate(x[0])) continue;
-      out.tx.push({ date: normDate(x[0]), name: str(x[1]), flow: num(x[2]), code: str(x[3]), price: num(x[4]), buy: num(x[5]), sell: num(x[6]), note: str(x[9]) });
+      out.tx.push({ row: r + 1, date: normDate(x[0]), name: str(x[1]), flow: num(x[2]), code: str(x[3]), price: num(x[4]), buy: num(x[5]), sell: num(x[6]), note: str(x[9]) });
     }
   }
   return out;
@@ -174,7 +174,7 @@ function parseUs(rows) {
     for (let r = txHdr + 1; r < rows.length; r++) {
       const x = rows[r];
       if (!isDate(x[0]) || !str(x[3])) continue;
-      out.tx.push({ date: normDate(x[0]), where: str(x[1]), flow: num(x[2]), name: str(x[3]), price: num(x[4]), buy: num(x[5]), sell: num(x[6]), note: str(x[9]) });
+      out.tx.push({ row: r + 1, date: normDate(x[0]), where: str(x[1]), flow: num(x[2]), name: str(x[3]), price: num(x[4]), buy: num(x[5]), sell: num(x[6]), note: str(x[9]) });
     }
   }
   return out;
@@ -200,6 +200,26 @@ function fmtCompactDate(s) {
   if (/^\d{8}$/.test(s)) return `${s.slice(0, 4)}/${s.slice(4, 6)}/${s.slice(6)}`;
   if (/^\d{6}$/.test(s)) return `${s.slice(0, 4)}/${s.slice(4, 6)}`;
   return s.replace(/(\d{4})(\d{2})~(\d{4})(\d{2})/, '$1/$2 – $3/$4');
+}
+
+// 可以修改、刪除的明細；row 是試算表的列號（Apps Script 從 A1 開始讀，所以陣列位置 +1）
+function ledgerRows(rows, col, header, map) {
+  const out = [];
+  const h = rows.findIndex(x => str(x && x[col]) === header);
+  if (h < 0) return out;
+  for (let r = h + 1; r < rows.length && str(cell(rows, r, col)) !== ''; r++) { const x = map(rows[r], r + 1); if (x) out.push(x); }
+  return out;
+}
+function parseLedger(raw) {
+  const trade = (x, row) => ({ row, date: normDate(x[0]), b: str(x[1]), flow: num(x[2]), code: str(x[3]), price: num(x[4]), buy: num(x[5]), sell: num(x[6]),
+    amt: num(x[7]) || num(x[8]), note: str(x[9]), key: num(x[2]) || num(x[5]) || num(x[6]) || 0 });
+  return {
+    flow: ledgerRows(raw.total || [], 0, 'Date', (x, row) => (num(x[3]) ? { row, date: normDate(x[0]), flow: num(x[3]), note: str(x[9]), key: num(x[3]) } : null)),
+    tw: ledgerRows(raw.tw || [], 0, '日期', trade),
+    us: ledgerRows(raw.us || [], 0, '日期', trade),
+    crypto: ledgerRows(raw.crypto || [], 24, '日期', (x, row) => ({ row, date: normDate(x[24]), type: str(x[25]), coin: str(x[26]), where: str(x[27]),
+      price: num(x[28]), qty: num(x[29]), usdt: num(x[30]), note: str(x[31]), key: num(x[30]) || 0 }))
+  };
 }
 
 function parsePlans(rows) {
@@ -416,7 +436,8 @@ function parseAll(raw) {
     crypto: safe(parseCrypto, raw.crypto), myDca: safe(parseMyDca, raw.myDca), kidsUs: safe(parseKidsUs, raw.kidsUs),
     kidsTw: safe(parseKidsTw, raw.kidsTw), plan: safe(parsePlan, raw.plan), milestone: safe(parseMilestone, raw.milestone),
     expense: safe(parseExpense, raw.expense), house: safe(parseHouse, raw.house),
-    career: raw.bb ? safe(parseCareer, raw.bb) : null
+    career: raw.bb ? safe(parseCareer, raw.bb) : null,
+    ledger: safe(parseLedger, raw)
   };
   derive(d);
   d.usAll = safe(() => combineUs(d));
@@ -845,9 +866,9 @@ function pageOverview(d) {
       <div class="r"><div class="t1">${wan(a.value)}</div><div class="t2" style="color:var(--text-secondary)">${pctPlain(a.value / sum)}</div></div>
       <span class="chev">›</span></div>`).join('')}</div>`;
 
-  const flows = t.history.filter(x => x.note).slice(-6).reverse();
+  const flows = (d.ledger ? d.ledger.flow : t.history.filter(x => x.note)).slice(-6).reverse();
   if (flows.length) {
-    h += `<div class="sec">最近資金異動</div><div class="list">${flows.map(f => `<div class="row">
+    h += `<div class="sec">最近資金異動<span class="seclink" data-go="more/ledger">全部明細 ›</span></div><div class="list">${flows.map(f => `<div class="row${f.row && ed() ? ' link' : ''}"${f.row && ed() ? ` data-form="ledger" data-arg="flow:${f.row}"` : ''}>
       <div class="main"><div class="t1" style="font-size:15px">${esc(f.note)}</div><div class="t2">${f.date}</div></div>
       <div class="r"><div class="t1 ${f.flow > 0 ? 'down' : ''}" style="font-size:15px">${f.flow ? (f.flow < 0 ? '投入 ' + ntd(-f.flow) : '取出 ' + ntd(f.flow)) : ''}</div></div></div>`).join('')}</div>`;
   }
@@ -901,14 +922,14 @@ function pageUs(d) {
     <div class="n"><span class="${cls(g.pct)}">${pct(g.pct)}</span>${g.irr != null ? '・IRR ' + pctPlain(g.irr) : ''}</div></div>`).join('')}</div>`;
   h += holdingsSection('c-us', all, usBroker, 'brokerSeg', usd, v => (v == null ? '—' : '$' + dec(v, 2)));
   h += txList(u.tx.slice(-12).reverse().map(x => ({
-    date: x.date, title: `${x.buy ? '買進' : x.sell ? '賣出' : ''} ${x.name}`, sub: `${esc(x.where)}・${x.buy || x.sell ? qty(x.buy || x.sell) + ' 股' : ''} @ ${x.price != null ? '$' + dec(x.price, 2) : '—'}`,
+    arg: 'us:' + x.row, date: x.date, title: `${x.buy ? '買進' : x.sell ? '賣出' : ''} ${x.name}`, sub: `${esc(x.where)}・${x.buy || x.sell ? qty(x.buy || x.sell) + ' 股' : ''} @ ${x.price != null ? '$' + dec(x.price, 2) : '—'}`,
     right: x.buy ? `<span>買</span>` : x.sell ? '<span class="up">賣</span>' : '' })));
   return h;
 }
 
 function txList(items) {
   if (!items.length) return '';
-  return `<div class="sec">最近交易</div><div class="list">${items.map(x => `<div class="row">
+  return `<div class="sec">最近交易<span class="seclink" data-go="more/ledger">全部明細 ›</span></div><div class="list">${items.map(x => `<div class="row${x.arg && ed() ? ' link' : ''}"${x.arg && ed() ? ` data-form="ledger" data-arg="${x.arg}"` : ''}>
     <div class="main"><div class="t1" style="font-size:15px">${esc(x.title)}</div><div class="t2">${x.date}・${x.sub}</div></div>
     <div class="r" style="font-size:14px;font-weight:600">${x.right}</div></div>`).join('')}</div>`;
 }
@@ -938,7 +959,8 @@ function pageTw(d) {
     ${chart('c-tw-w', el => hbarChart(el, Object.keys(byName).sort((a, b) => byName[b] - byName[a]).map(n => ({ label: n, value: byName[n], text: pctPlain(byName[n] / tv),
       html: tr('現值', ntd(byName[n])) + tr('比重', pctPlain(byName[n] / tv)) }))))}</div>`;
   h += txList(w.tx.slice(-12).reverse().map(x => ({
-    date: x.date, title: `${x.buy ? '買進' : x.sell ? '賣出' : ''} ${x.name}`, sub: `${x.buy || x.sell ? qty(x.buy || x.sell) + ' 股' : ''} @ ${x.price != null ? dec(x.price, 1) : '—'}`,
+    arg: 'tw:' + x.row, date: x.date, title: x.buy || x.sell ? `${x.buy ? '買進' : '賣出'} ${x.name}` : x.flow ? (x.flow < 0 ? '入金' : '出金') : x.name,
+    sub: x.buy || x.sell ? `${qty(x.buy || x.sell)} 股 @ ${x.price != null ? dec(x.price, 1) : '—'}` : [x.flow ? ntd(Math.abs(x.flow)) : '', esc(x.note)].filter(Boolean).join('・'),
     right: x.buy ? '<span>買</span>' : x.sell ? '<span class="up">賣</span>' : '' })));
   return h;
 }
@@ -977,6 +999,41 @@ function pageCrypto(d) {
   return h;
 }
 
+// 明細與復原：四種明細切換；每列點進去可以修改、刪除；上面有「復原上一步」
+let ledgerKind = 'flow';
+const LEDGER_KINDS = [['flow', '資金異動'], ['tw', '台股'], ['us', '美股'], ['crypto', '加密貨幣']];
+function ledgerLine(kind, x) {
+  const m = v => (hidden ? MASK : v);
+  if (kind === 'flow') return { t1: x.note || (x.flow < 0 ? '投入' : '撤出'), t2: x.date, r: `<span class="${x.flow > 0 ? 'down' : ''}">${x.flow < 0 ? '投入' : '撤出'} ${m(ntd(Math.abs(x.flow)))}</span>` };
+  if (kind === 'crypto') {
+    const trade = x.type === '買進' || x.type === '賣出';
+    return { t1: trade ? `${x.type} ${x.coin}` : x.type, t2: [esc(x.date), esc(x.where), trade ? `${qty(x.qty)} 顆 @ $${dec(x.price, 2)}` : '', esc(x.note)].filter(Boolean).join('・'),
+      r: `${x.usdt > 0 ? '+' : x.usdt < 0 ? '−' : ''}${m(dec(Math.abs(x.usdt || 0), 2))} USDT` };
+  }
+  const money = kind === 'tw' ? v => ntd(v) : v => usd(v, 2);
+  if (x.buy || x.sell) {
+    const name = kind === 'tw' ? x.b : x.code;
+    return { t1: `${x.buy ? '買進' : '賣出'} ${name}`, t2: [esc(x.date), kind === 'us' ? esc(x.b) : '', `${qty(x.buy || x.sell)} 股 @ ${dec(x.price, 2)}`, esc(x.note)].filter(Boolean).join('・'),
+      r: x.buy ? '<span>買</span>' : '<span class="up">賣</span>' };
+  }
+  return { t1: `${kind === 'us' ? x.b + ' ' : ''}${x.flow < 0 ? '入金' : '出金'}`, t2: [x.date, x.note].filter(Boolean).map(esc).join('・'),
+    r: m(money(Math.abs(x.flow || 0))) };
+}
+function pageLedger(d) {
+  const L = d.ledger || {}, e = ed(), u = e && e.undo;
+  let h = '<h1 class="title">明細與復原</h1>';
+  if (!e) h += `<div class="card"><p class="msg">要把 Apps Script 更新到第 ${LATEST_SCRIPT} 版，才能修改明細和復原。</p></div>`;
+  else h += `<div class="card"><h3>復原</h3><p class="cap">${u && u.count ? `上一步：${esc(u.desc)}（${esc(u.time)}）<br>最近 ${u.count} 次從 App 的修改都可以一步步復原` : '目前沒有可以復原的動作'}</p>
+    ${u && u.count ? '<button class="btn soft" id="undoBtn" style="margin-top:10px">復原上一步</button>' : ''}</div>`;
+  h += `<div class="seg" id="ledgerSeg">${LEDGER_KINDS.map(k => `<button data-k="${k[0]}" class="${k[0] === ledgerKind ? 'on' : ''}">${k[1]}</button>`).join('')}</div>`;
+  const list = (L[ledgerKind] || []).slice().reverse();
+  if (!list.length) return h + '<div class="empty">沒有資料</div>';
+  h += `<p class="hint" style="margin:0 4px 8px">${e ? '點一筆可以修改或刪除；' : ''}最新的在最上面，共 ${list.length} 筆</p>`;
+  return h + `<div class="list">${list.map(x => { const l = ledgerLine(ledgerKind, x); return `<div class="row${e ? ' link' : ''}"${e ? ` data-form="ledger" data-arg="${ledgerKind}:${x.row}"` : ''}>
+    <div class="main"><div class="t1" style="font-size:15px">${esc(l.t1)}</div><div class="t2" style="white-space:normal">${l.t2}</div></div>
+    <div class="r" style="font-size:14px;font-weight:600">${l.r}</div></div>`; }).join('')}</div>`;
+}
+
 const MORE = [
   { id: 'kids', title: '小孩帳戶', sub: '小孩的美股與台股', icon: '★', color: '--s5' },
   { id: 'dca', title: '我的定期定額', sub: '台幣扣款 QQQ／0050', icon: '↻', color: '--s3' },
@@ -985,6 +1042,7 @@ const MORE = [
   { id: 'house', title: '房產', sub: '購入價與估計現值', icon: '⌂', color: '--s6' },
   { id: 'milestone', title: '里程碑', sub: '重要資金動作', icon: '⚑', color: '--s7' },
   { id: 'career', title: '職涯與薪資', sub: '年資、職位、薪水與分紅', icon: '▲', color: '--s4' },
+  { id: 'ledger', title: '明細與復原', sub: '修改、刪除資金異動與交易；復原上一步', icon: '☰', color: '--s8' },
   { id: 'settings', title: '設定', sub: '資料來源與密碼', icon: '⚙', color: '--axis' }
 ];
 function pageMore() {
@@ -1291,7 +1349,7 @@ function pageSettings(first) {
 function route() { return (location.hash || '#overview').slice(1); }
 const PAGES = { overview: pageOverview, us: pageUs, tw: pageTw, crypto: pageCrypto, more: pageMore,
   'more/kids': pageKids, 'more/dca': pageDca, 'more/plan': pagePlan, 'more/expense': pageExpense,
-  'more/house': pageHouse, 'more/milestone': pageMilestone, 'more/career': pageCareer, 'more/settings': () => pageSettings(false) };
+  'more/house': pageHouse, 'more/milestone': pageMilestone, 'more/career': pageCareer, 'more/ledger': pageLedger, 'more/settings': () => pageSettings(false) };
 
 function render() {
   const r = route();

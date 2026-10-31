@@ -28,11 +28,25 @@ async function send(action, payload) {
   return j.message || '已寫入試算表';
 }
 
-function toast(msg) {
+// undoable：寫入成功後的提示多一個「復原」按鈕，6 秒內可以直接按
+function toast(msg, undoable) {
   let t = $('#toast');
   if (!t) { t = document.createElement('div'); t.id = 'toast'; document.body.appendChild(t); }
-  t.textContent = msg; t.classList.add('show');
-  clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), 2600);
+  t.innerHTML = esc(msg) + (undoable ? '<button type="button" class="tundo">復原</button>' : '');
+  t.classList.toggle('act', !!undoable);
+  const b = t.querySelector('.tundo');
+  if (b) b.addEventListener('click', () => { t.classList.remove('show'); doUndo(true); });
+  t.classList.add('show');
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), undoable ? 6000 : 2600);
+}
+
+// 復原上一步（從 App 做的最後一次修改）
+async function doUndo(quick) {
+  const u = ed() && ed().undo;
+  if (!quick && !confirm(`要復原「${(u && u.desc) || '上一步'}」嗎？`)) return;
+  toast('復原中…');
+  try { const msg = await send('undo', {}); render(); toast('✓ ' + msg); }
+  catch (e) { toast(e.message === 'Failed to fetch' || e.name === 'TypeError' ? '連不上，請檢查網路' : e.message); }
 }
 
 /* ---------- 表單外框 ---------- */
@@ -67,7 +81,7 @@ function openSheet(spec) {
     first.textContent = '寫入中…';
     try {
       const msg = await send(req[0], req[1]);
-      closeSheet(); render(); toast('✓ ' + msg);
+      closeSheet(); render(); toast('✓ ' + msg, true);
     } catch (e) {
       err.textContent = e.message === 'Failed to fetch' || e.name === 'TypeError' ? '連不上，請檢查網路' : e.message;
       btns.forEach(b => { b.disabled = false; }); first.textContent = label;
@@ -341,8 +355,76 @@ function formCareer(kind) {
   openSheet(specs[kind]);
 }
 
+/* ---------- 9. 明細修改、刪除（資金異動、台股、美股、加密貨幣） ---------- */
+const dash = s => String(s || '').replace(/\//g, '-');   // 2026/10/31 → 2026-10-31（日期欄位要這種格式）
+
+function formLedger(arg) {
+  const [kind, r] = String(arg).split(':'), row = Number(r);
+  const x = (((state.data && state.data.ledger) || {})[kind] || []).find(i => i.row === row);
+  if (!x) { toast('找不到這筆，請下拉更新後再試'); return; }
+  const base = { kind, row, expect: { date: x.date, key: x.key } };
+  const del = { label: '刪除這筆', run: () => (confirm('確定要刪除這筆嗎？刪錯了可以在「明細與復原」按復原。') ? ['ledger', Object.assign({ op: 'del' }, base)] : null) };
+  const edit = data => ['ledger', Object.assign({ op: 'edit', data }, base)];
+
+  if (kind === 'flow') {
+    openSheet({
+      title: '修改資金異動', ok: '儲存修改', extra: [del],
+      body: fSeg('dir', [['in', '投入'], ['out', '撤出']], x.flow < 0 ? 'in' : 'out') + fDate('date', '日期', dash(x.date)) +
+        fNum('amt', '金額（台幣）', Math.abs(x.flow)) + fText('note', '備註', x.note) +
+        '<p class="hint">只改 Total Overall 這一筆；當時一起記到台股、美股或加密貨幣的出入金，請到各自的明細修改。</p>',
+      submit: f => { const a = req(nval(f, 'amt'), '金額'); return edit({ date: slash(val(f, 'date')), flow: val(f, 'dir') === 'in' ? -a : a, note: val(f, 'note') }); }
+    });
+    return;
+  }
+
+  if (kind === 'tw' || kind === 'us') {
+    const tw = kind === 'tw', brokers = Object.keys(ed().us.brokers);
+    const type = x.buy ? 'buy' : x.sell ? 'sell' : x.flow < 0 ? 'in' : 'out';
+    openSheet({
+      title: tw ? '修改台股明細' : '修改美股明細', ok: '儲存修改', extra: [del],
+      body: fSeg('type', [['buy', '買進'], ['sell', '賣出'], ['in', '入金'], ['out', '出金']], type) + fDate('date', '日期', dash(x.date)) +
+        (tw ? '' : fSelect('broker', '券商', brokers.map(b => [b, b]), x.b || brokers[0])) +
+        `<div id="ldTrade">${fText('stock', tw ? '股號或股名' : '代號', tw ? (x.code || x.b) : x.code)}
+          <div class="row2">${fNum('price', '成交單價', x.price)}${fNum('qty', '股數', x.buy || x.sell)}</div></div>` +
+        `<div id="ldFlow">${fNum('amount', tw ? '金額（台幣）' : '金額（美金）', x.flow ? Math.abs(x.flow) : '')}</div>` +
+        fText('note', '備註', x.note) + hint('ldHint'),
+      after(f) {
+        const t = val(f, 'type'), trade = t === 'buy' || t === 'sell';
+        f.querySelector('#ldTrade').style.display = trade ? '' : 'none';
+        f.querySelector('#ldFlow').style.display = trade ? 'none' : '';
+        f.querySelector('#ldHint').textContent = '閒置現金' + (trade ? '和均價' : '') + '會跟著調整' + (trade ? '' : '；如果是從總覽「成本變更」記的，資金異動那筆要另外改');
+      },
+      submit(f) {
+        const t = val(f, 'type'), trade = t === 'buy' || t === 'sell';
+        if (trade && !val(f, 'stock')) throw new Error(tw ? '請填股號或股名' : '請填代號');
+        return edit({ date: slash(val(f, 'date')), type: t, broker: tw ? '' : val(f, 'broker'), stock: val(f, 'stock'),
+          price: trade ? req(nval(f, 'price'), '成交單價') : '', qty: trade ? req(nval(f, 'qty'), '股數') : '',
+          amount: trade ? '' : req(nval(f, 'amount'), '金額'), note: val(f, 'note') });
+      }
+    });
+    return;
+  }
+
+  // 加密貨幣：買賣可以改幣名、位置、單價、顆數；出入金只改 USDT 數量
+  const trade = x.type === '買進' || x.type === '賣出';
+  openSheet({
+    title: '修改加密貨幣紀錄', ok: '儲存修改', extra: [del],
+    body: (trade ? fSeg('side', [['buy', '買進'], ['sell', '賣出']], x.type === '買進' ? 'buy' : 'sell')
+      : `<p class="hint" style="margin-top:0">類型：${esc(x.type)}</p>` + fSeg('dir', [['in', '轉入'], ['out', '轉出']], (x.usdt || 0) < 0 ? 'out' : 'in')) +
+      fDate('date', '日期', dash(x.date)) +
+      (trade ? `<div class="row2">${fText('coin', '幣名', x.coin)}${fText('where', '存於', x.where)}</div>
+        <div class="row2">${fNum('price', '成交單價（USD）', x.price)}${fNum('qty', '顆數', x.qty)}</div>`
+        : fNum('usdt', 'USDT 數量', Math.abs(x.usdt || 0))) +
+      fText('note', '備註', x.note) +
+      `<p class="hint">${trade ? '顆數和 USDT 會跟著調整' : 'USDT 會跟著調整；另一邊（資金異動、台股或美股）的那筆要另外改'}</p>`,
+    submit: f => edit(trade
+      ? { date: slash(val(f, 'date')), side: val(f, 'side'), coin: val(f, 'coin'), where: val(f, 'where'), price: req(nval(f, 'price'), '單價'), qty: req(nval(f, 'qty'), '顆數'), note: val(f, 'note') }
+      : { date: slash(val(f, 'date')), usdt: (val(f, 'dir') === 'out' ? -1 : 1) * req(nval(f, 'usdt'), 'USDT 數量'), note: val(f, 'note') })
+  });
+}
+
 /* ---------- 綁定 ---------- */
-const FORMS = { cost: formCost, trade: formTrade, cryptoFlow: formCryptoFlow, dca: formDca, plan: formPlan, expense: formExpense, loan: formLoan, house: formHouse, milestone: formMilestone, career: formCareer };
+const FORMS = { cost: formCost, trade: formTrade, cryptoFlow: formCryptoFlow, dca: formDca, plan: formPlan, expense: formExpense, loan: formLoan, house: formHouse, milestone: formMilestone, career: formCareer, ledger: formLedger };
 
 function bindEdit() {
   // ＋ 開頭的按鈕是「新增」：加號換成金色
@@ -357,4 +439,9 @@ function bindEdit() {
     if (hidden) { toast('先按右上角的眼睛顯示數字，再編輯'); return; }
     FORMS[el.dataset.form](el.dataset.arg);
   }));
+  // 明細頁：切換種類、復原上一步
+  const seg = $('#ledgerSeg');
+  if (seg) seg.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; ledgerKind = b.dataset.k; render(); });
+  const ub = $('#undoBtn');
+  if (ub) ub.addEventListener('click', () => doUndo(false));
 }

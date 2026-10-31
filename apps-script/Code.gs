@@ -2,20 +2,20 @@
 // 安裝方式：試算表 → 擴充功能 → Apps Script → 把這整段貼上 → 改下面的 KEY → 部署為網頁應用程式
 //   執行身分：我　／　誰可以存取：所有人
 // App 每次都帶著密碼來；密碼不對就什麼都拿不到，也不能寫。
-// 每次從 App 寫入，都會在「App 紀錄」分頁留一筆，打錯時可以對照還原。
+// 每次從 App 寫入，都會在「App 紀錄」分頁留一筆；改到的格子另外記在隱藏的「App 復原」分頁，App 可以「復原上一步」。
 
 // 只要改這一行：密碼放在兩個單引號中間，例如 const KEY = 'abc123';
 const KEY = '請改成你自己的密碼';
 
 // 程式碼版本（App 設定頁會顯示，用來確認部署的是不是最新版；這行不用改）
-const SCRIPT_VERSION = 14;
+const SCRIPT_VERSION = 15;
 
 // 要讀的工作表與範圍（試算表版面有大改時，才需要調整這裡）
 const RANGES = {
   total:     ['Total Overall', 'A1:Z300'],
   tw:        ['台股', 'A1:Q400'],
   us:        ['美股', 'A1:Q600'],
-  crypto:    ['幣 ', 'A1:N60'],
+  crypto:    ['幣 ', 'A1:AF200'],
   myDca:     ['My 定期定額 (台幣帳戶)', 'A1:J40'],
   kidsUs:    ['橙&澈 美股', 'A1:J60'],
   kidsTw:    ['橙&澈 定期定額台股', 'A1:J80'],
@@ -49,12 +49,21 @@ function doPost(e) {
     try {
       const fn = ACTIONS[body.action];
       if (!fn) throw new Error('不認得的動作：' + body.action);
+      if (body.action !== 'undo') REC = { desc: '', ops: [] };
       const msg = fn(body.payload || {});
-      log(body.action, body.payload);
       SpreadsheetApp.flush();
+      if (REC) { REC.desc = msg || body.action; recSave(); }
+      log(body.action, body.payload);
       return json({ ok: true, message: msg || '已寫入試算表', updated: now(), data: readAll() });
     } catch (err) {
-      return json({ ok: false, error: String(err.message || err) });
+      // 寫到一半失敗：照記下的資料倒回去，不留半套
+      let rolled = false;
+      if (REC && REC.ops.length) {
+        try { SpreadsheetApp.flush(); } catch (e) {}
+        try { applyUndo(REC.ops); SpreadsheetApp.flush(); rolled = true; } catch (e) {}
+      }
+      REC = null;
+      return json({ ok: false, error: String(err.message || err) + (rolled ? '（已自動還原，試算表沒有被改動）' : '') });
     } finally {
       lock.releaseLock();
     }
@@ -109,6 +118,7 @@ function editInfo() {
   info.career = careerInfo();
   info.crypto = { coins: cryptoRows(), cash: cryptoCash().qty };
   info.house = houseRows();
+  info.undo = undoInfo();
   return info;
 }
 
@@ -152,7 +162,7 @@ const ACTIONS = {
       if (!buy && qty > h.qty) throw new Error(`${st.name} 只有 ${h.qty} 股，不能賣 ${qty} 股`);
       if (buy) setAvg(s.getRange(h.row, 15), h.avg, h.qty, price, qty);
       const last = lastRowOf(s, 'A', '日期');
-      appendRow(s, last, 1, 10, { 1: date, 2: st.name, 3: '', 4: st.code, 5: price, 6: buy ? qty : '', 7: buy ? '' : qty, 8: buy ? -amt : '', 9: buy ? '' : amt, 10: p.note || '' });
+      appendRow(s, last, 1, 10, { 1: date, 2: st.name, 3: '', 4: st.code, 5: price, 6: buy ? qty : '', 7: buy ? '' : qty, 8: r => (buy ? `=-E${r}*F${r}` : ''), 9: r => (buy ? '' : `=G${r}*E${r}`), 10: p.note || '' });
       addTo(s.getRange('C3'), buy ? -amt : amt);
       return `已記錄台股${buy ? '買進' : '賣出'} ${st.name} ${qty} 股`;
     }
@@ -166,7 +176,7 @@ const ACTIONS = {
     if (!buy && qty > h.qty + 1e-9) throw new Error(`${code} 只有 ${h.qty} 股，不能賣 ${qty} 股`);
     if (buy) setAvg(s.getRange(h.row, 14), h.avg, h.qty, price, qty);
     const last = lastRowOf(s, 'A', '日期');
-    appendRow(s, last, 1, 10, { 1: date, 2: broker, 3: '', 4: code, 5: price, 6: buy ? qty : '', 7: buy ? '' : qty, 8: buy ? -amt : '', 9: buy ? '' : amt, 10: p.note || '' });
+    appendRow(s, last, 1, 10, { 1: date, 2: broker, 3: '', 4: code, 5: price, 6: buy ? qty : '', 7: buy ? '' : qty, 8: r => (buy ? `=-E${r}*F${r}` : ''), 9: r => (buy ? '' : `=G${r}*E${r}`), 10: p.note || '' });
     addTo(s.getRange('C' + BROKERS[broker]), buy ? -amt : amt);
     return `已記錄美股${buy ? '買進' : '賣出'} ${code} ${qty} 股`;
   },
@@ -179,8 +189,8 @@ const ACTIONS = {
       const it = items.find(i => i.id === x.id);
       if (!it) throw new Error('找不到定期定額項目：' + x.id);
       const s = sh(it.sheet);
-      if (num(x.add)) s.getRange(it.row, it.col + 5).setValue(round2(it.invested + num(x.add)));
-      if (x.shares !== '' && x.shares != null) s.getRange(it.row, it.col + 6).setValue(num(x.shares));
+      if (num(x.add)) put(s.getRange(it.row, it.col + 5), round2(it.invested + num(x.add)));
+      if (x.shares !== '' && x.shares != null) put(s.getRange(it.row, it.col + 6), num(x.shares));
     });
     return '已更新定期定額';
   },
@@ -188,14 +198,14 @@ const ACTIONS = {
   // 長期計畫：rate 年化報酬率（%）、yearly 每年預設投入（萬）、years: [{year, input, actual}]
   plan(p) {
     const s = sh('Plan'), info = planInfo();
-    if (p.rate != null && p.rate !== '') s.getRange('C2').setValue(num(p.rate));
-    if (p.yearly != null && p.yearly !== '') s.getRange('F3').setValue(num(p.yearly));
+    if (p.rate != null && p.rate !== '') put(s.getRange('C2'), num(p.rate));
+    if (p.yearly != null && p.yearly !== '') put(s.getRange('F3'), num(p.yearly));
     (p.years || []).forEach(y => {
       const r = info.years.find(x => x.year === num(y.year));
       if (!r) return;
-      if (y.input === '' || y.input == null) s.getRange(r.row, 6).setFormula('=$F$3');
-      else s.getRange(r.row, 6).setValue(num(y.input));
-      if (y.actual !== undefined) s.getRange(r.row, 8).setValue(y.actual === '' ? '' : num(y.actual));
+      if (y.input === '' || y.input == null) putF(s.getRange(r.row, 6), '=$F$3');
+      else put(s.getRange(r.row, 6), num(y.input));
+      if (y.actual !== undefined) put(s.getRange(r.row, 8), y.actual === '' ? '' : num(y.actual));
     });
     return '已更新長期計畫';
   },
@@ -211,7 +221,7 @@ const ACTIONS = {
       .map(x => [String(x.name).trim(), need(x.amount, `「${String(x.name).trim()}」的金額`)]);
     if (list.length > n) throw new Error(`${m} 月最多 ${n} 項`);
     while (list.length < n) list.push(['', '']);
-    rg.setValues(list);
+    putVs(rg, list);
     return `已更新 ${m} 月固定支出`;
   },
 
@@ -220,12 +230,12 @@ const ACTIONS = {
     const r = loanRows().find(x => x.name === p.name);
     if (!r) throw new Error('找不到房貸：' + p.name);
     const s = sh('House');
-    if (p.base) s.getRange(r.row, 2).setValue(toDate(p.base));
-    if (p.balance != null && p.balance !== '') s.getRange(r.row, 3).setValue(num(p.balance));
-    if (p.rate != null && p.rate !== '') fmtCell(s.getRange(r.row, 4).setValue(num(p.rate) / 100), '0.00%');
-    if (p.pmt != null && p.pmt !== '') s.getRange(r.row, 5).setValue(num(p.pmt));
-    if (p.day) s.getRange(r.row, 6).setValue(num(p.day));
-    if (p.end) s.getRange(r.row, 7).setValue(toDate(p.end));
+    if (p.base) put(s.getRange(r.row, 2), toDate(p.base));
+    if (p.balance != null && p.balance !== '') put(s.getRange(r.row, 3), num(p.balance));
+    if (p.rate != null && p.rate !== '') fmtCell(put(s.getRange(r.row, 4), num(p.rate) / 100), '0.00%');
+    if (p.pmt != null && p.pmt !== '') put(s.getRange(r.row, 5), num(p.pmt));
+    if (p.day) put(s.getRange(r.row, 6), num(p.day));
+    if (p.end) put(s.getRange(r.row, 7), toDate(p.end));
     return '已更新房貸';
   },
 
@@ -234,8 +244,8 @@ const ACTIONS = {
     const r = houseRows().find(x => x.name === p.name);
     if (!r) throw new Error('找不到房產：' + p.name);
     const s = sh('House');
-    s.getRange(r.row, 12).setValue(need(p.unit, '估計單價'));
-    if (p.park != null && p.park !== '') s.getRange(r.row, 11).setValue(num(p.park));
+    put(s.getRange(r.row, 12), need(p.unit, '估計單價'));
+    if (p.park != null && p.park !== '') put(s.getRange(r.row, 11), num(p.park));
     return `已更新 ${p.name} 估價`;
   },
 
@@ -274,15 +284,15 @@ const ACTIONS = {
       const vals = s.getRange('A1:B300').getValues();
       let r = vals.length; while (r > 0 && vals[r - 1][0] === '' && vals[r - 1][1] === '') r--;
       // 日期欄存成文字（例如 20261105），避免被當成數字或日期改掉格式
-      fmtCell(s.getRange(r + 1, 1), '@').setValue(need(p.date, '日期', true));
-      s.getRange(r + 1, 2).setValue(need(p.text, '內容', true));
+      put(fmtCell(s.getRange(r + 1, 1), '@'), need(p.date, '日期', true));
+      put(s.getRange(r + 1, 2), need(p.text, '內容', true));
       return '已新增里程碑';
     }
     const row = num(p.row);
     if (!(row >= 1)) throw new Error('找不到這個里程碑');
-    if (p.op === 'del') { s.deleteRow(row); return '已刪除里程碑'; }
-    fmtCell(s.getRange(row, 1), '@').setValue(String(need(p.date, '日期', true)));
-    s.getRange(row, 2).setValue(need(p.text, '內容', true));
+    if (p.op === 'del') { snap(s.getRange(row, 1, 1, 2)); s.deleteRow(row); recRow('rowDel', s, row); return '已刪除里程碑'; }
+    put(fmtCell(s.getRange(row, 1), '@'), String(need(p.date, '日期', true)));
+    put(s.getRange(row, 2), need(p.text, '內容', true));
     return '已更新里程碑';
   },
 
@@ -296,6 +306,7 @@ const ACTIONS = {
       if (!prev) throw new Error('BB 分頁沒有任何年度');
       const row = prev.lastRow + 1;
       s.insertRowAfter(prev.lastRow);
+      recRow('rowIns', s, row);
       const salary = need(p.salary, '調薪後月薪');
       const title = (p.promoted ? '↑ ' : '') + (p.title || prev.title);
       const pr = prev.row;
@@ -310,17 +321,44 @@ const ACTIONS = {
       return `已新增 ${y} 年`;
     }
     if (!r) throw new Error('BB 分頁找不到 ' + y + ' 年');
-    if (p.op === 'mid') { s.getRange(r.row, 14).setValue(need(p.amount, '年中分紅')); s.getRange(r.row, 15).setFormula(`=IFERROR(N${r.row}/M${r.row},"")`); return `已記錄 ${y} 年中分紅`; }
+    if (p.op === 'mid') { put(s.getRange(r.row, 14), need(p.amount, '年中分紅')); putF(s.getRange(r.row, 15), `=IFERROR(N${r.row}/M${r.row},"")`); return `已記錄 ${y} 年中分紅`; }
     if (p.op === 'ye') {
       const a = num(p.allowance) || 0, b = need(p.bonus, '年終');
-      s.getRange(r.row, 8).setValue(a); s.getRange(r.row, 9).setValue(b);
-      s.getRange(r.row, 7).setFormula(`=H${r.row}+I${r.row}`);
-      s.getRange(r.row, 10).setFormula(`=IFERROR(I${r.row}/F${r.row},"")`);
-      s.getRange(r.row, 11).setFormula(`=IFERROR(G${r.row}/F${r.row},"")`);
+      put(s.getRange(r.row, 8), a); put(s.getRange(r.row, 9), b);
+      putF(s.getRange(r.row, 7), `=H${r.row}+I${r.row}`);
+      putF(s.getRange(r.row, 10), `=IFERROR(I${r.row}/F${r.row},"")`);
+      putF(s.getRange(r.row, 11), `=IFERROR(G${r.row}/F${r.row},"")`);
       return `已記錄 ${y} 年前分紅`;
     }
-    if (p.op === 'title') { s.getRange(r.row, 2).setValue((p.promoted ? '↑ ' : '') + need(p.title, '職稱', true)); return '已更新職稱'; }
+    if (p.op === 'title') { put(s.getRange(r.row, 2), (p.promoted ? '↑ ' : '') + need(p.title, '職稱', true)); return '已更新職稱'; }
     throw new Error('不認得的職涯動作');
+  },
+
+  // 明細的修改與刪除：kind 'flow'（Total Overall 資金異動）、'tw'（台股交易表）、'us'（美股交易表）、'crypto'（幣分頁交易紀錄）
+  // op 'edit'（data 是新內容）或 'del'；expect 是 App 看到的日期與金額，用來確認試算表上還是同一筆
+  ledger(p) {
+    const L = LEDGERS[p.kind];
+    if (!L) throw new Error('不認得的明細種類');
+    const s = sh(L.sheet), head = findRow(s, L.col, L.header), last = lastRowOf(s, L.col, L.header);
+    let row = num(p.row);
+    if (!(row > head && row <= last)) throw new Error('找不到這筆資料，請下拉更新後再試');
+    const old = L.read(s, row);
+    if (p.expect && (old.date !== dkey(p.expect.date) || Math.abs((old.key || 0) - (num(p.expect.key) || 0)) > 0.005))
+      throw new Error('這筆資料在試算表上已經變動，請下拉更新後再試');
+    if (p.op === 'del') {
+      L.unapply(s, old);
+      deleteLedgerRow(s, row, L.c1, L.n, last);
+      return '已刪除這筆' + L.label;
+    }
+    if (p.op !== 'edit') throw new Error('不認得的明細動作');
+    const shift = L.unapply(s, old) || 0;   // 加新股票時，持股清單多一列，交易表會往下移
+    row += shift;
+    return L.write(s, row, p.data || {}, old) || '已更新這筆' + L.label;
+  },
+
+  // 復原上一步：把最後一次從 App 寫入（或修改、刪除）的內容倒回去
+  undo() {
+    return '已復原：' + undoLast();
   }
 };
 
@@ -381,21 +419,23 @@ function yearEndRecord() {
    ================================================================ */
 // Total Overall 歷史表加一列：A 日期 B 當下總資產 D 資金異動 G 匯率 J 備註（C、E、F、H 是公式，跟著上一列）
 function appendTotalOverall(date, flow, note) {
-  const s = sh('Total Overall'), last = lastRowOf(s, 'A', 'Date');
-  const total = num(s.getRange('G2').getValue()), fx = num(s.getRange('B2').getValue());
-  appendRow(s, last, 1, 10, { 1: date, 2: Math.round(total), 4: flow, 7: fx, 10: note });
+  const s = sh('Total Overall'), head = findRow(s, 'A', 'Date'), last = lastRowOf(s, 'A', 'Date');
+  const total = num(s.getRange('G2').getValue()), fx = num(s.getRange('B2').getValue()), first = head + 1;
+  appendRow(s, last, 1, 10, { 1: date, 2: Math.round(total), 3: r => `=-SUM($D$${first}:D${r})`, 4: flow, 5: r => `=B${r}-C${r}`,
+    6: r => `=E${r}/C${r}`, 7: fx, 8: r => `=B${r}/G${r}`, 10: note });
 }
 
 // 在表格最後一列之後加一列。為了讓 Google 表格（Table）自動延伸，先在最後一列「之前」插入，
 // 再把原本最後一列搬回去，新資料寫在真正的最後一列。values 用欄號（1 起算）指定要寫的格子。
-// 注意：表格裡有指定類型的欄位（例如日期欄）不准改數字格式，所以這裡只複製內容、不碰格式，
+// 注意：表格裡有指定類型的欄位（例如日期欄）不准改數字格式，所以這裡只複製內容與公式、不碰格式，
 // 日期欄會自動套用表格的日期格式。寫入失敗時把插入的列刪掉，不留半套資料。
+// values 的值可以是函式 row => 值（例如要寫 =-E153*F153 這種跟列號有關的公式）。
 function appendRow(s, last, c1, n, values) {
   s.insertRowBefore(last);
   const row = last + 1;
   // 第一步：把原本的最後一列搬到插入的空白列（失敗就刪掉那列空白列，原本的資料沒動）
   try {
-    s.getRange(row, c1, 1, n).copyTo(s.getRange(last, c1, 1, n), { contentsOnly: true });
+    s.getRange(row, c1, 1, n).copyTo(s.getRange(last, c1, 1, n), SpreadsheetApp.CopyPasteType.PASTE_FORMULA, false);
     SpreadsheetApp.flush();   // 讓試算表現在就回報錯誤，才能在這裡還原
   } catch (err) {
     try { s.deleteRow(last); } catch (e) {}
@@ -403,12 +443,13 @@ function appendRow(s, last, c1, n, values) {
   }
   // 第二步：新資料寫在真正的最後一列（失敗就刪掉這一列，原本的最後一列已經在上一列）
   try {
-    Object.keys(values).forEach(c => s.getRange(row, Number(c)).setValue(values[c]));
+    Object.keys(values).forEach(c => { const v = values[c]; s.getRange(row, Number(c)).setValue(typeof v === 'function' ? v(row) : v); });
     SpreadsheetApp.flush();
   } catch (err) {
     try { s.deleteRow(row); } catch (e) {}
     throw err;
   }
+  recRow('rowIns', s, row);   // 復原時刪掉這一列，原本的最後一列已經在上一列
   return row;
 }
 
@@ -454,12 +495,13 @@ function usHoldings(broker) {
 // 新的台股：Price 分頁加一列抓價格，持股清單加一列（公式照上一列）
 function addTwHolding(st, price) {
   const p = sh('Price'), pr = firstEmpty(p, 'A', 2);
-  fmtCell(p.getRange(pr, 1, 1, 2), '@').setValues([[st.code, st.name]]);
-  p.getRange(pr, 3).setFormula(`=IFERROR(GOOGLEFINANCE("TPE:"&A${pr}),IFERROR(VALUE(IMPORTXML("https://tw.stock.yahoo.com/quote/"&A${pr}&".TWO","//span[contains(@class,'Fz(32px)')]")),""))`);
+  putVs(fmtCell(p.getRange(pr, 1, 1, 2), '@'), [[st.code, st.name]]);
+  putF(p.getRange(pr, 3), `=IFERROR(GOOGLEFINANCE("TPE:"&A${pr}),IFERROR(VALUE(IMPORTXML("https://tw.stock.yahoo.com/quote/"&A${pr}&".TWO","//span[contains(@class,'Fz(32px)')]")),""))`);
   const s = sh('台股'), list = holdings(s), last = list[list.length - 1].row;
   s.insertRowBefore(last);
   s.getRange(last + 1, 9, 1, 9).copyTo(s.getRange(last, 9, 1, 9));
   const row = last + 1;
+  recRow('rowIns', s, row);
   fmtCell(s.getRange(row, 9, 1, 2), '@').setValues([[st.code, st.name]]);
   s.getRange(row, 14).setFormula(`=Price!C${pr}`);
   s.getRange(row, 15).setValue(price);
@@ -472,13 +514,14 @@ function addUsHolding(broker, code, price) {
   let pr = p.getRange('E2:E200').getValues().findIndex(r => String(r[0]).trim().toUpperCase() === code) + 2;
   if (pr < 2) {
     pr = firstEmpty(p, 'E', 2);
-    p.getRange(pr, 5).setValue(code);
-    p.getRange(pr, 6).setFormula(`=GOOGLEFINANCE("${code}")`);
+    put(p.getRange(pr, 5), code);
+    putF(p.getRange(pr, 6), `=GOOGLEFINANCE("${code}")`);
   }
   const s = sh('美股'), list = usHoldings(broker), last = list[list.length - 1].row;
   s.insertRowBefore(last);
   s.getRange(last + 1, 9, 1, 9).copyTo(s.getRange(last, 9, 1, 9));
   const row = last + 1;
+  recRow('rowIns', s, row);
   s.getRange(row, 9).setValue(code);
   s.getRange(row, 13).setFormula(`=Price!$F$${pr}`);
   s.getRange(row, 14).setValue(price);
@@ -600,15 +643,15 @@ function addCryptoRow(coin, where, price) {
     let pr = p.getRange('H2:H100').getValues().findIndex(r => normCode(r[0]) === coin) + 2;
     if (pr < 2) {
       pr = firstEmpty(p, 'H', 2);
-      p.getRange(pr, 8).setValue(coin);
-      p.getRange(pr, 9).setFormula(`=IFERROR(GOOGLEFINANCE("CURRENCY:"&H${pr}&"USD"),${price})`);
+      put(p.getRange(pr, 8), coin);
+      putF(p.getRange(pr, 9), `=IFERROR(GOOGLEFINANCE("CURRENCY:"&H${pr}&"USD"),${price})`);
     }
     priceCell = `=Price!I${pr}`;
   }
-  s.getRange(row, 1, 1, 3).setValues([[coin, where, 0]]);
-  s.getRange(row, 4).setValue(priceCell);
-  s.getRange(row, 5).setFormula(`=D${row}*C${row}`);
-  s.getRange(row, 6).setFormula(`=E${row}*$J$2`);
+  putVs(s.getRange(row, 1, 1, 3), [[coin, where, 0]]);
+  put(s.getRange(row, 4), priceCell);
+  putF(s.getRange(row, 5), `=D${row}*C${row}`);
+  putF(s.getRange(row, 6), `=E${row}*$J$2`);
   SpreadsheetApp.flush();
   return { row, name: coin, where, qty: 0 };
 }
@@ -622,7 +665,7 @@ function cryptoTrade(p, date, price, qty, buy, amt) {
   let h = cryptoRows().find(x => x.name === coin && x.where === where);
   if (!h) { if (!buy) throw new Error(`${where} 沒有 ${coin}`); h = addCryptoRow(coin, where, price); }
   if (!buy && qty > h.qty + 1e-12) throw new Error(`${where} 的 ${coin} 只有 ${h.qty} 顆，不能賣 ${qty} 顆`);
-  s.getRange(h.row, 3).setValue(Math.round((h.qty + (buy ? qty : -qty)) * 1e8) / 1e8);
+  put(s.getRange(h.row, 3), Math.round((h.qty + (buy ? qty : -qty)) * 1e8) / 1e8);
   addTo(s.getRange(cash.row, 3), buy ? -amt : amt);
   cryptoLog(date, buy ? '買進' : '賣出', coin, where, price, qty, buy ? -amt : amt, p.note || '');
   return `已記錄加密貨幣${buy ? '買進' : '賣出'} ${coin} ${qty} 顆`;
@@ -631,8 +674,8 @@ function cryptoTrade(p, date, price, qty, buy, amt) {
 // 加密貨幣分頁 Y～AF 欄的交易紀錄（L～U 欄是原本的已兌現表和備註，不要動）
 function cryptoLog(date, type, coin, where, price, qty, usdt, note) {
   const s = sh(CRYPTO), row = firstEmpty(s, 'Y', 2);
-  fmtCell(s.getRange(row, 25).setValue(date), 'yyyy/mm/dd');
-  s.getRange(row, 26, 1, 7).setValues([[type, coin, where, price, qty, round2(usdt), note]]);
+  put(fmtCell(s.getRange(row, 25), 'yyyy/mm/dd'), date);
+  putVs(s.getRange(row, 26, 1, 7), [[type, coin, where, price, qty, round2(usdt), note]]);
 }
 
 // House 上半部的房產列（「房貸」那列以前）：A 名稱 K 估計車位（萬）L 估計單價（萬/坪）
@@ -642,6 +685,239 @@ function houseRows() {
     if (String(vals[i][0]).trim()) out.push({ row: i + 1, name: String(vals[i][0]).trim(), unit: num(vals[i][11]), park: num(vals[i][10]) });
   }
   return out;
+}
+
+/* ================================================================
+   明細的修改與刪除：資金異動（Total Overall）、台股交易表、美股交易表、加密貨幣交易紀錄
+   每種明細：在哪個分頁、哪一欄有標題、從第幾欄起佔幾欄；
+   read 讀一列；unapply 把這筆對閒置現金、均價、顆數的影響拿掉；write 寫入新內容並套用新的影響
+   ================================================================ */
+const LEDGERS = {
+  flow: {
+    sheet: 'Total Overall', col: 'A', header: 'Date', c1: 1, n: 10, label: '資金異動',
+    read(s, row) {
+      const v = s.getRange(row, 1, 1, 10).getValues()[0];
+      return { date: dkey(v[0]), key: num(v[3]) || 0, flow: num(v[3]), note: String(v[9]) };
+    },
+    unapply() { return 0; },
+    write(s, row, d) {
+      put(s.getRange(row, 1), toDate(d.date));
+      put(s.getRange(row, 4), need(d.flow, '金額'));
+      put(s.getRange(row, 10), String(d.note || ''));
+      return '已更新這筆資金異動';
+    }
+  },
+  tw: {
+    sheet: '台股', col: 'A', header: '日期', c1: 1, n: 10, label: '台股明細',
+    read: tradeRead,
+    unapply(s, old) { return tradeUnapply('tw', s, old); },
+    write(s, row, d, old) { return tradeWrite('tw', s, row, d, old); }
+  },
+  us: {
+    sheet: '美股', col: 'A', header: '日期', c1: 1, n: 10, label: '美股明細',
+    read: tradeRead,
+    unapply(s, old) { return tradeUnapply('us', s, old); },
+    write(s, row, d, old) { return tradeWrite('us', s, row, d, old); }
+  },
+  crypto: {
+    sheet: CRYPTO, col: 'Y', header: '日期', c1: 25, n: 8, label: '加密貨幣紀錄',
+    read(s, row) {
+      const v = s.getRange(row, 25, 1, 8).getValues()[0];
+      return { date: dkey(v[0]), type: String(v[1]).trim(), coin: normCode(v[2]), where: String(v[3]).trim(), price: num(v[4]),
+        qty: num(v[5]) || 0, usdt: num(v[6]) || 0, key: num(v[6]) || 0, note: String(v[7]) };
+    },
+    unapply(s, old) { cryptoEffect(s, old, -1); return 0; },
+    write(s, row, d, old) {
+      const date = toDate(d.date), note = String(d.note || '');
+      if (old.type === '買進' || old.type === '賣出') {
+        const buy = d.side ? d.side === 'buy' : old.type === '買進';
+        const coin = normCode(d.coin || old.coin), where = String(d.where || old.where).trim();
+        const price = need(d.price, '單價'), qty = need(d.qty, '顆數');
+        if (price <= 0 || qty <= 0) throw new Error('單價和顆數要大於 0');
+        const amt = round2(price * qty), rec = { type: buy ? '買進' : '賣出', coin, where, qty, usdt: buy ? -amt : amt };
+        cryptoEffect(s, rec, 1, price);
+        putVs(s.getRange(row, 25, 1, 8), [[date, rec.type, coin, where, price, qty, rec.usdt, note]]);
+      } else {
+        const usdt = need(d.usdt, 'USDT 數量');
+        cryptoEffect(s, { type: old.type, usdt }, 1);
+        putVs(s.getRange(row, 25, 1, 8), [[date, old.type, old.coin, old.where, '', '', usdt, note]]);
+      }
+      return '已更新這筆加密貨幣紀錄';
+    }
+  }
+};
+
+// 台股、美股交易表的一列：A 日期 B 股名（美股是券商）C 出入金 D 股號 E 價格 F 買入股數 G 賣出股數 H 買入金額 I 賣出金額 J 備註
+function tradeRead(s, row) {
+  const v = s.getRange(row, 1, 1, 10).getValues()[0];
+  return { date: dkey(v[0]), b: String(v[1]).trim(), flow: num(v[2]), code: v[3] === '' ? '' : normCode(v[3]), price: num(v[4]),
+    buy: num(v[5]), sell: num(v[6]), h: num(v[7]), i: num(v[8]), note: String(v[9]),
+    key: num(v[2]) || num(v[5]) || num(v[6]) || 0 };
+}
+
+function tradeCash(m, s, broker) {
+  if (m === 'tw') return s.getRange('C3');
+  return BROKERS[broker] ? s.getRange('C' + BROKERS[broker]) : null;
+}
+
+// 拿掉一列交易的影響：閒置現金退回；買進的話均價倒算回買之前（庫存股數是公式，刪掉或改掉那列就會自己更新）
+function tradeUnapply(m, s, old) {
+  const cash = tradeCash(m, s, old.b);
+  const eff = -(old.flow || 0) + (old.h || 0) + (old.i || 0);   // 這列讓閒置現金變多少
+  if (cash && eff) addTo(cash, -eff);
+  if (old.buy && old.price && old.code) {
+    const list = m === 'tw' ? holdings(s) : (BROKERS[old.b] ? usHoldings(old.b) : []);
+    const h = list.find(x => x.code === old.code);
+    if (h) {
+      const rest = h.qty - old.buy;
+      put(s.getRange(h.row, m === 'tw' ? 15 : 14), rest > 0 ? round2((h.avg * h.qty - old.price * old.buy) / rest) : h.avg);
+    }
+  }
+  return 0;
+}
+
+// d: {date, type: 'buy'|'sell'|'in'|'out', stock, broker, price, qty, amount, note}
+function tradeWrite(m, s, row, d, old) {
+  const tw = m === 'tw', date = toDate(d.date), note = String(d.note || '');
+  const b = tw ? '' : String(d.broker || '');
+  if (!tw && !BROKERS[b]) throw new Error('請選券商');
+  if (d.type === 'in' || d.type === 'out') {
+    const amt = need(d.amount, '金額');
+    if (amt <= 0) throw new Error('金額要大於 0');
+    const flow = d.type === 'in' ? -amt : amt;   // 試算表的寫法：負數是存進這個帳戶
+    putVs(s.getRange(row, 1, 1, 10), [[date, b, flow, '', '', '', '', '', '', note]]);
+    addTo(tradeCash(m, s, b), -flow);
+    return `已更新這筆${tw ? '台股' : '美股'}${d.type === 'in' ? '入金' : '出金'}`;
+  }
+  const price = need(d.price, '單價'), qty = need(d.qty, '股數'), buy = d.type === 'buy';
+  if (price <= 0 || qty <= 0) throw new Error('單價和股數要大於 0');
+  let st, h;
+  if (tw) { st = resolveTw(String(d.stock || '').trim()); h = holdings(s).find(x => x.code === st.code); }
+  else {
+    const code = normCode(d.stock || '');
+    if (!/^[A-Z][A-Z0-9.\-]*$/.test(code)) throw new Error('美股請輸入代號，例如 QQQ');
+    st = { code, name: code }; h = usHoldings(b).find(x => x.code === code);
+  }
+  if (!h) {
+    if (!buy) throw new Error('沒有持有 ' + st.code);
+    h = tw ? addTwHolding(st, price) : addUsHolding(b, st.code, price);
+    row += 1;   // 持股清單多一列，下面的交易表整個往下移一列
+  }
+  // 庫存股數是公式，目前還算著這列的舊內容；先扣掉舊的才是「不含這筆」的庫存
+  const same = old && old.code === st.code && (tw || old.b === b);
+  const held = h.qty - (same ? (old.buy || 0) - (old.sell || 0) : 0);
+  if (!buy && qty > held + 1e-9) throw new Error(`${st.name} 只有 ${held} 股，不能賣 ${qty} 股`);
+  if (buy) setAvg(s.getRange(h.row, tw ? 15 : 14), h.avg, held, price, qty);
+  putVs(s.getRange(row, 1, 1, 10), [[date, tw ? st.name : b, '', st.code, price, buy ? qty : '', buy ? '' : qty,
+    buy ? `=-E${row}*F${row}` : '', buy ? '' : `=G${row}*E${row}`, note]]);
+  addTo(tradeCash(m, s, b), buy ? -round2(price * qty) : round2(price * qty));
+  return `已更新這筆${tw ? '台股' : '美股'}${buy ? '買進' : '賣出'}`;
+}
+
+// 加密貨幣紀錄的影響：買賣改顆數與 USDT；出入金只改 USDT。sign 1 套用、-1 拿掉
+function cryptoEffect(s, rec, sign, price) {
+  if (rec.type === '買進' || rec.type === '賣出') {
+    const dq = (rec.type === '買進' ? rec.qty : -rec.qty) * sign;
+    let h = cryptoRows().find(x => x.name === rec.coin && x.where === rec.where);
+    if (!h && sign > 0) {
+      if (dq < 0) throw new Error(`${rec.where} 沒有 ${rec.coin}`);
+      h = addCryptoRow(rec.coin, rec.where, price);
+    }
+    if (h) {
+      const nq = Math.round((h.qty + dq) * 1e8) / 1e8;
+      if (nq < -1e-9) throw new Error(`${rec.where} 的 ${rec.coin} 只有 ${h.qty} 顆`);
+      put(s.getRange(h.row, 3), nq);
+    }
+  }
+  if (rec.usdt) addTo(s.getRange(cryptoCash().row, 3), sign * rec.usdt);
+}
+
+// 刪掉明細的一列：只動這張表的欄（c1 起 n 欄），下面的往上補；
+// 從 A 欄開始的表（資金異動、台股、美股）最後一列整列空了才刪整列；加密貨幣紀錄旁邊還有別的表，只清空不刪列
+function deleteLedgerRow(s, row, c1, n, last) {
+  snap(s.getRange(row, c1, last - row + 1, n));
+  if (row < last) s.getRange(row + 1, c1, last - row, n).copyTo(s.getRange(row, c1, last - row, n), SpreadsheetApp.CopyPasteType.PASTE_FORMULA, false);
+  s.getRange(last, c1, 1, n).clearContent();
+  SpreadsheetApp.flush();
+  if (c1 === 1 && s.getRange(last, 1, 1, s.getLastColumn()).getValues()[0].every(v => v === '')) { s.deleteRow(last); recRow('rowDel', s, last); }
+}
+
+// 日期統一成 yyyy/MM/dd 字串，用來比對 App 看到的是不是同一筆
+function dkey(v) {
+  if (v instanceof Date) return Utilities.formatDate(v, SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone(), 'yyyy/MM/dd');
+  const m = String(v == null ? '' : v).match(/(\d{4})\D(\d{1,2})\D(\d{1,2})/);
+  return m ? `${m[1]}/${('0' + m[2]).slice(-2)}/${('0' + m[3]).slice(-2)}` : String(v == null ? '' : v);
+}
+
+/* ================================================================
+   復原：每次從 App 寫入時，先記下會被改到的格子（原本的值或公式）和插入、刪除的列，
+   存在隱藏的「App 復原」分頁；「復原上一步」照相反順序倒回去。寫到一半失敗也用同一份資料自動還原。
+   ================================================================ */
+const UNDO_SHEET = 'App 復原';
+const UNDO_KEEP = 30;   // 最多保留幾步
+let REC = null;         // 這次動作的紀錄 {desc, ops}；null 表示不記（例如自動紀錄、復原本身）
+
+function snap(range) {
+  if (REC) {
+    const f = range.getFormulas(), v = range.getValues();
+    REC.ops.push({ t: 'cells', sh: range.getSheet().getName(), r: range.getRow(), c: range.getColumn(),
+      d: v.map((row, i) => row.map((x, j) => f[i][j] || (x instanceof Date ? { $d: x.getTime() } : x))) });
+  }
+  return range;
+}
+function recRow(t, s, row) { if (REC) REC.ops.push({ t, sh: s.getName(), row }); }
+function put(range, v) { snap(range); range.setValue(v); return range; }
+function putF(range, f) { snap(range); range.setFormula(f); return range; }
+function putVs(range, vals) { snap(range); range.setValues(vals); return range; }
+
+function applyUndo(ops) {
+  ops.slice().reverse().forEach(op => {
+    const t = sh(op.sh);
+    if (op.t === 'cells') t.getRange(op.r, op.c, op.d.length, op.d[0].length).setValues(op.d.map(r => r.map(x => (x && x.$d != null ? new Date(x.$d) : x))));
+    else if (op.t === 'rowIns') t.deleteRow(op.row);
+    else if (op.t === 'rowDel') t.insertRowBefore(op.row);
+  });
+}
+
+function undoSheet(create) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let s = ss.getSheetByName(UNDO_SHEET);
+  if (!s && create) {
+    s = ss.insertSheet(UNDO_SHEET);
+    s.getRange(1, 1, 1, 3).setValues([['時間', '說明', '還原資料（App 用，請勿修改）']]);
+    s.setFrozenRows(1);
+    s.hideSheet();
+  }
+  return s;
+}
+
+function recSave() {
+  if (!REC || !REC.ops.length) { REC = null; return; }
+  const s = undoSheet(true), j = JSON.stringify(REC.ops), parts = [];
+  // 一格最多 5 萬字，切段存；每段前面加 ~，避免開頭是 = 被當成公式
+  for (let i = 0; i < j.length; i += 40000) parts.push('~' + j.slice(i, i + 40000));
+  const row = s.getLastRow() + 1;
+  s.getRange(row, 1, 1, 2 + parts.length).setValues([[now(), REC.desc].concat(parts)]);
+  const extra = s.getLastRow() - 1 - UNDO_KEEP;
+  if (extra > 0) s.deleteRows(2, extra);
+  REC = null;
+}
+
+function undoLast() {
+  const s = undoSheet(false);
+  if (!s || s.getLastRow() < 2) throw new Error('沒有可以復原的動作');
+  const r = s.getLastRow(), v = s.getRange(r, 1, 1, s.getLastColumn()).getValues()[0];
+  const ops = JSON.parse(v.slice(2).filter(x => x !== '').map(x => String(x).replace(/^~/, '')).join(''));
+  applyUndo(ops);
+  s.deleteRow(r);
+  return v[1];
+}
+
+function undoInfo() {
+  const s = undoSheet(false);
+  if (!s || s.getLastRow() < 2) return { count: 0 };
+  const r = s.getLastRow(), v = s.getRange(r, 1, 1, 2).getDisplayValues()[0];
+  return { count: r - 1, time: v[0], desc: v[1] };
 }
 
 /* ================================================================
@@ -685,13 +961,13 @@ function fmt(n) { return Math.round(n).toLocaleString('en-US'); }
 // 均價（移動平均）：買進後＝（原均價×原股數＋買價×買股數）÷ 新股數；賣出不改均價
 function setAvg(cell, avg, held, price, qty) {
   const total = held + qty;
-  cell.setValue(round2(held > 0 ? (avg * held + price * qty) / total : price));
+  put(cell, round2(held > 0 ? (avg * held + price * qty) / total : price));
 }
 
 // 現金這類手打的數字：在原本的值上加減（格子是公式就不動）
 function addTo(cell, delta) {
   if (cell.getFormula()) return;
-  cell.setValue(round2((num(cell.getValue()) || 0) + delta));
+  put(cell, round2((num(cell.getValue()) || 0) + delta));
 }
 
 // 設定數字格式；Google 表格（Table）裡有指定類型的欄位不准改格式，那種欄位本來就會自動套格式，略過即可
