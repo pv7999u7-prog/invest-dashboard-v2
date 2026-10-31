@@ -8,7 +8,7 @@
 const KEY = '請改成你自己的密碼';
 
 // 程式碼版本（App 設定頁會顯示，用來確認部署的是不是最新版；這行不用改）
-const SCRIPT_VERSION = 16;
+const SCRIPT_VERSION = 17;
 
 // 要讀的工作表與範圍（試算表版面有大改時，才需要調整這裡）
 const RANGES = {
@@ -254,27 +254,29 @@ const ACTIONS = {
   // usdt 是加密貨幣這邊增減的 USDT；ntd 是台幣那邊的金額（台幣、台股才需要）
   cryptoFlow(p) {
     const date = toDate(p.date), sign = p.dir === 'out' ? -1 : 1, usdt = need(p.usdt, 'USDT 數量');
+    // 各表用同一個備註，之後在明細刪除或改日期時，才找得到同一次出入金的其他筆
+    const note = p.note || { fiat: sign > 0 ? '加密貨幣入金' : '加密貨幣出金' }[p.source] || (sign > 0 ? '轉到加密貨幣' : '從加密貨幣轉回');
     if (usdt <= 0) throw new Error('USDT 數量要大於 0');
     const c = cryptoCash(), inOut = sign > 0 ? '轉入' : '轉出';
     if (sign < 0 && usdt > c.qty + 1e-9) throw new Error(`USDT 只有 ${c.qty}，不能轉出 ${usdt}`);
     let label;
     if (p.source === 'fiat') {
       const ntd = need(p.ntd, '台幣金額');
-      appendTotalOverall(date, -sign * ntd, p.note || (sign > 0 ? '加密貨幣入金' : '加密貨幣出金'));
+      appendTotalOverall(date, -sign * ntd, note);
       label = sign > 0 ? '入金（台幣）' : '出金（台幣）';
     } else if (p.source === 'tw') {
       const ntd = need(p.ntd, '台幣金額'), tw = sh('台股'), last = lastRowOf(tw, 'A', '日期');
-      appendRow(tw, last, 1, 10, { 1: date, 2: '', 3: sign * ntd, 4: '', 5: '', 6: '', 7: '', 8: '', 9: '', 10: p.note || (sign > 0 ? '轉到加密貨幣' : '從加密貨幣轉回') });
+      appendRow(tw, last, 1, 10, { 1: date, 2: '', 3: sign * ntd, 4: '', 5: '', 6: '', 7: '', 8: '', 9: '', 10: note });
       addTo(tw.getRange('C3'), -sign * ntd);
       label = '台股' + inOut;
     } else if (BROKERS[p.source]) {
       const us = sh('美股'), last = lastRowOf(us, 'A', '日期');
-      appendRow(us, last, 1, 10, { 1: date, 2: p.source, 3: sign * usdt, 4: '', 5: '', 6: '', 7: '', 8: '', 9: '', 10: p.note || (sign > 0 ? '轉到加密貨幣' : '從加密貨幣轉回') });
+      appendRow(us, last, 1, 10, { 1: date, 2: p.source, 3: sign * usdt, 4: '', 5: '', 6: '', 7: '', 8: '', 9: '', 10: note });
       addTo(us.getRange('C' + BROKERS[p.source]), -sign * usdt);
       label = p.source + inOut;
     } else throw new Error('請選資金來源');
     addTo(sh(CRYPTO).getRange(c.row, 3), sign * usdt);
-    cryptoLog(date, label, 'USDT', CRYPTO_CASH[1], '', '', sign * usdt, p.note || '');
+    cryptoLog(date, label, 'USDT', CRYPTO_CASH[1], '', '', sign * usdt, note);
     return `已記錄加密貨幣${sign > 0 ? '轉入' : '轉出'} ${usdt} USDT`;
   },
 
@@ -343,18 +345,40 @@ const ACTIONS = {
     const s = sh(L.sheet), head = findRow(s, L.col, L.header), last = lastRowOf(s, L.col, L.header);
     let row = num(p.row);
     if (!(row > head && row <= last)) throw new Error('找不到這筆資料，請下拉更新後再試');
-    const old = L.read(s, row);
+    const old = ledgerRead(p.kind, s, row);
     if (p.expect && (old.date !== dkey(p.expect.date) || Math.abs((old.key || 0) - (num(p.expect.key) || 0)) > 0.005))
       throw new Error('這筆資料在試算表上已經變動，請下拉更新後再試');
+    // 同一次出入金在其他表的那幾筆（p.linked === false 才不連動）
+    const group = p.linked === false ? [] : linkedRows(p.kind, row, old);
     if (p.op === 'del') {
-      L.unapply(s, old);
-      deleteLedgerRow(s, row, L.c1, L.n, last);
-      return '已刪除這筆' + L.label;
+      // 全部一起刪；同一張表從下往上刪，前面的列號才不會跑掉
+      const all = group.concat([{ k: p.kind, r: row, x: old }]).sort((a, b) => (a.k < b.k ? -1 : a.k > b.k ? 1 : b.r - a.r));
+      all.forEach(g => {
+        const L2 = LEDGERS[g.k], s2 = sh(L2.sheet);
+        L2.unapply(s2, g.x);
+        deleteLedgerRow(s2, g.r, L2.c1, L2.n, lastRowOf(s2, L2.col, L2.header));
+      });
+      return group.length ? `已刪除這筆${L.label}，和同一次出入金的另外 ${group.length} 筆` : '已刪除這筆' + L.label;
     }
     if (p.op !== 'edit') throw new Error('不認得的明細動作');
+    const d = p.data || {};
     const shift = L.unapply(s, old) || 0;   // 加新股票時，持股清單多一列，交易表會往下移
     row += shift;
-    return L.write(s, row, p.data || {}, old) || '已更新這筆' + L.label;
+    const msg = L.write(s, row, d, old) || '已更新這筆' + L.label;
+    // 日期、備註改了，同一組的其他筆一起改（金額怎麼分到各帳戶沒辦法自動推算，不連動）
+    const nd = d.date ? toDate(d.date) : null, nn = d.note != null ? String(d.note) : null;
+    let synced = 0;
+    group.forEach(g => {
+      const L2 = LEDGERS[g.k], s2 = sh(L2.sheet);
+      let r2 = g.r;
+      if (shift && L2.sheet === L.sheet && r2 > row - shift) r2 += shift;
+      const changed = (nd && dkey(nd) !== g.x.date) || (nn != null && nn.trim() !== String(g.x.note).trim());
+      if (!changed) return;
+      if (nd) put(s2.getRange(r2, L2.dateCol), nd);
+      if (nn != null) put(s2.getRange(r2, L2.noteCol), nn);
+      synced++;
+    });
+    return synced ? `${msg}；同一次出入金的另外 ${synced} 筆也改了日期、備註` : msg;
   },
 
   // 閒置現金直接改成某個數字（例如收到股利、手續費和券商對帳）：id 見 cashAccounts
@@ -703,11 +727,9 @@ function houseRows() {
    ================================================================ */
 const LEDGERS = {
   flow: {
-    sheet: 'Total Overall', col: 'A', header: 'Date', c1: 1, n: 10, label: '資金異動',
-    read(s, row) {
-      const v = s.getRange(row, 1, 1, 10).getValues()[0];
-      return { date: dkey(v[0]), key: num(v[3]) || 0, flow: num(v[3]), note: String(v[9]) };
-    },
+    sheet: 'Total Overall', col: 'A', header: 'Date', c1: 1, n: 10, label: '資金異動', dateCol: 1, noteCol: 10,
+    parse: v => ({ date: dkey(v[0]), key: num(v[3]) || 0, flow: num(v[3]), note: String(v[9]) }),
+    isFlow: x => !!x.flow,
     unapply() { return 0; },
     write(s, row, d) {
       put(s.getRange(row, 1), toDate(d.date));
@@ -717,24 +739,22 @@ const LEDGERS = {
     }
   },
   tw: {
-    sheet: '台股', col: 'A', header: '日期', c1: 1, n: 10, label: '台股明細',
-    read: tradeRead,
+    sheet: '台股', col: 'A', header: '日期', c1: 1, n: 10, label: '台股明細', dateCol: 1, noteCol: 10,
+    parse: tradeParse, isFlow: x => !!x.flow && !x.code,
     unapply(s, old) { return tradeUnapply('tw', s, old); },
     write(s, row, d, old) { return tradeWrite('tw', s, row, d, old); }
   },
   us: {
-    sheet: '美股', col: 'A', header: '日期', c1: 1, n: 10, label: '美股明細',
-    read: tradeRead,
+    sheet: '美股', col: 'A', header: '日期', c1: 1, n: 10, label: '美股明細', dateCol: 1, noteCol: 10,
+    parse: tradeParse, isFlow: x => !!x.flow && !x.code,
     unapply(s, old) { return tradeUnapply('us', s, old); },
     write(s, row, d, old) { return tradeWrite('us', s, row, d, old); }
   },
   crypto: {
-    sheet: CRYPTO, col: 'Y', header: '日期', c1: 25, n: 8, label: '加密貨幣紀錄',
-    read(s, row) {
-      const v = s.getRange(row, 25, 1, 8).getValues()[0];
-      return { date: dkey(v[0]), type: String(v[1]).trim(), coin: normCode(v[2]), where: String(v[3]).trim(), price: num(v[4]),
-        qty: num(v[5]) || 0, usdt: num(v[6]) || 0, key: num(v[6]) || 0, note: String(v[7]) };
-    },
+    sheet: CRYPTO, col: 'Y', header: '日期', c1: 25, n: 8, label: '加密貨幣紀錄', dateCol: 25, noteCol: 32,
+    parse: v => ({ date: dkey(v[0]), type: String(v[1]).trim(), coin: normCode(v[2]), where: String(v[3]).trim(), price: num(v[4]),
+      qty: num(v[5]) || 0, usdt: num(v[6]) || 0, key: num(v[6]) || 0, note: String(v[7]) }),
+    isFlow: x => x.type !== '買進' && x.type !== '賣出',
     unapply(s, old) { cryptoEffect(s, old, -1); return 0; },
     write(s, row, d, old) {
       const date = toDate(d.date), note = String(d.note || '');
@@ -757,8 +777,7 @@ const LEDGERS = {
 };
 
 // 台股、美股交易表的一列：A 日期 B 股名（美股是券商）C 出入金 D 股號 E 價格 F 買入股數 G 賣出股數 H 買入金額 I 賣出金額 J 備註
-function tradeRead(s, row) {
-  const v = s.getRange(row, 1, 1, 10).getValues()[0];
+function tradeParse(v) {
   return { date: dkey(v[0]), b: String(v[1]).trim(), flow: num(v[2]), code: v[3] === '' ? '' : normCode(v[3]), price: num(v[4]),
     buy: num(v[5]), sell: num(v[6]), h: num(v[7]), i: num(v[8]), note: String(v[9]),
     key: num(v[2]) || num(v[5]) || num(v[6]) || 0 };
@@ -767,6 +786,31 @@ function tradeRead(s, row) {
 function tradeCash(m, s, broker) {
   if (m === 'tw') return s.getRange('C3');
   return BROKERS[broker] ? s.getRange('C' + BROKERS[broker]) : null;
+}
+
+// 讀一列明細
+function ledgerRead(k, s, row) {
+  const L = LEDGERS[k];
+  return L.parse(s.getRange(row, L.c1, 1, L.n).getValues()[0]);
+}
+
+// 同一次「成本變更」或「加密貨幣出入金」會在資金異動、台股、美股、加密貨幣各記一筆出入金，日期和備註相同。
+// 找出跟這筆同一組的其他筆（備註空白的不算，避免誤抓）
+function linkedRows(kind, row, x) {
+  const note = String(x.note || '').trim();
+  if (!LEDGERS[kind].isFlow(x) || !note) return [];
+  const out = [];
+  Object.keys(LEDGERS).forEach(k => {
+    const L = LEDGERS[k], s = sh(L.sheet);
+    let head, last;
+    try { head = findRow(s, L.col, L.header); last = lastRowOf(s, L.col, L.header); } catch (err) { return; }
+    s.getRange(head + 1, L.c1, last - head, L.n).getValues().forEach((v, i) => {
+      const r = head + 1 + i, y = L.parse(v);
+      if (k === kind && r === row) return;
+      if (y.date === x.date && String(y.note).trim() === note && L.isFlow(y)) out.push({ k, r, x: y });
+    });
+  });
+  return out;
 }
 
 // 拿掉一列交易的影響：閒置現金退回；買進的話均價倒算回買之前（庫存股數是公式，刪掉或改掉那列就會自己更新）
