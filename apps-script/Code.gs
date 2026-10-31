@@ -8,7 +8,7 @@
 const KEY = '請改成你自己的密碼';
 
 // 程式碼版本（App 設定頁會顯示，用來確認部署的是不是最新版；這行不用改）
-const SCRIPT_VERSION = 15;
+const SCRIPT_VERSION = 16;
 
 // 要讀的工作表與範圍（試算表版面有大改時，才需要調整這裡）
 const RANGES = {
@@ -119,6 +119,7 @@ function editInfo() {
   info.crypto = { coins: cryptoRows(), cash: cryptoCash().qty };
   info.house = houseRows();
   info.undo = undoInfo();
+  info.cash = cashAccounts();
   return info;
 }
 
@@ -354,6 +355,14 @@ const ACTIONS = {
     const shift = L.unapply(s, old) || 0;   // 加新股票時，持股清單多一列，交易表會往下移
     row += shift;
     return L.write(s, row, p.data || {}, old) || '已更新這筆' + L.label;
+  },
+
+  // 閒置現金直接改成某個數字（例如收到股利、手續費和券商對帳）：id 見 cashAccounts
+  cash(p) {
+    const a = cashAccounts().find(x => x.id === p.id);
+    if (!a) throw new Error('找不到這個帳戶');
+    put(cashCell(a.id), need(p.amount, '閒置現金'));
+    return `已更新 ${a.label} 閒置現金`;
   },
 
   // 復原上一步：把最後一次從 App 寫入（或修改、刪除）的內容倒回去
@@ -840,6 +849,31 @@ function deleteLedgerRow(s, row, c1, n, last) {
   s.getRange(last, c1, 1, n).clearContent();
   SpreadsheetApp.flush();
   if (c1 === 1 && s.getRange(last, 1, 1, s.getLastColumn()).getValues()[0].every(v => v === '')) { s.deleteRow(last); recRow('rowDel', s, last); }
+}
+
+// 各帳戶的閒置現金：id、名稱、幣別、在 App 哪一頁、目前金額
+// 小孩美股帳戶從「橙&澈 美股」的 Name 表讀名字（D 欄是現金餘額 USD），不寫死在程式裡
+function cashAccounts() {
+  const out = [], tw = sh('台股'), us = sh('美股');
+  out.push({ id: 'tw', label: '台股 CUBE', cur: 'NTD', page: 'tw', value: num(tw.getRange('C3').getValue()) });
+  Object.keys(BROKERS).forEach(b => out.push({ id: 'us:' + b, label: '美股 ' + b, cur: 'USD', page: 'us', value: num(us.getRange('C' + BROKERS[b]).getValue()) }));
+  try {
+    const k = sh('橙&澈 美股'), h = findRow(k, 'A', 'Name'), v = k.getRange(h + 1, 1, 10, 4).getValues();
+    for (let i = 0; i < v.length && v[i][0] !== '' && String(v[i][0]).trim() !== 'Total'; i++) {
+      out.push({ id: 'kid:' + (h + 1 + i), label: String(v[i][0]).trim() + ' 美股', cur: 'USD', page: 'more/kids', value: num(v[i][3]) });
+    }
+  } catch (err) {}
+  const c = cryptoRows().find(x => x.name === CRYPTO_CASH[0] && x.where === CRYPTO_CASH[1]);
+  out.push({ id: 'usdt', label: '加密貨幣 Binance', cur: 'USDT', page: 'crypto', value: c ? c.qty : 0 });
+  return out;
+}
+
+function cashCell(id) {
+  if (id === 'tw') return sh('台股').getRange('C3');
+  if (id.indexOf('us:') === 0 && BROKERS[id.slice(3)]) return sh('美股').getRange('C' + BROKERS[id.slice(3)]);
+  if (id.indexOf('kid:') === 0) return sh('橙&澈 美股').getRange(Number(id.slice(4)), 4);
+  if (id === 'usdt') return sh(CRYPTO).getRange(cryptoCash().row, 3);
+  throw new Error('找不到這個帳戶');
 }
 
 // 日期統一成 yyyy/MM/dd 字串，用來比對 App 看到的是不是同一筆

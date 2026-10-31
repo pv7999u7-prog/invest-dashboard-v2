@@ -423,8 +423,25 @@ function formLedger(arg) {
   });
 }
 
+/* ---------- 10. 閒置現金（收到股利、和券商對帳時直接改） ---------- */
+function formCash(id) {
+  const a = ((ed() && ed().cash) || []).find(x => x.id === id);
+  if (!a) return;
+  const unit = a.cur === 'NTD' ? '台幣' : a.cur === 'USD' ? '美金' : 'USDT';
+  openSheet({
+    title: `${esc(a.label)}・閒置現金`,
+    body: fNum('amount', `閒置現金（${unit}）`, a.value) + hint('cashHint'),
+    after(f) {
+      const v = nval(f, 'amount'), d = v != null && a.value != null ? v - a.value : 0;
+      f.querySelector('#cashHint').innerHTML = `目前 ${fmtN(a.value, 2)}${Math.abs(d) > 0.004 ? `，${d > 0 ? '增加' : '減少'} ${fmtN(Math.abs(d), 2)}` : ''}<br>` +
+        '收到股利或和券商對帳時，直接填券商 App 上的現金餘額。只改現金，不會記成投入成本。';
+    },
+    submit: f => ['cash', { id, amount: req(nval(f, 'amount'), '閒置現金') }]
+  });
+}
+
 /* ---------- 綁定 ---------- */
-const FORMS = { cost: formCost, trade: formTrade, cryptoFlow: formCryptoFlow, dca: formDca, plan: formPlan, expense: formExpense, loan: formLoan, house: formHouse, milestone: formMilestone, career: formCareer, ledger: formLedger };
+const FORMS = { cost: formCost, trade: formTrade, cryptoFlow: formCryptoFlow, dca: formDca, plan: formPlan, expense: formExpense, loan: formLoan, house: formHouse, milestone: formMilestone, career: formCareer, ledger: formLedger, cash: formCash };
 
 function bindEdit() {
   // ＋ 開頭的按鈕是「新增」：加號換成金色

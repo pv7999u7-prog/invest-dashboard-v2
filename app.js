@@ -4,8 +4,8 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '2.2.0';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
-const LATEST_SCRIPT = 15;   // 最新 Code.gs 的 SCRIPT_VERSION
+const APP_VERSION = '2.3.0';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const LATEST_SCRIPT = 16;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
 
@@ -866,6 +866,7 @@ function pageOverview(d) {
       <div class="r"><div class="t1">${wan(a.value)}</div><div class="t2" style="color:var(--text-secondary)">${pctPlain(a.value / sum)}</div></div>
       <span class="chev">›</span></div>`).join('')}</div>`;
 
+  h += cashSection('', '各帳戶閒置現金');
   const flows = (d.ledger ? d.ledger.flow : t.history.filter(x => x.note)).slice(-6).reverse();
   if (flows.length) {
     h += `<div class="sec">最近資金異動<span class="seclink" data-go="more/ledger">全部明細 ›</span></div><div class="list">${flows.map(f => `<div class="row${f.row && ed() ? ' link' : ''}"${f.row && ed() ? ` data-form="ledger" data-arg="flow:${f.row}"` : ''}>
@@ -920,11 +921,23 @@ function pageUs(d) {
   </div>
   <div class="tiles">${all.groups.map(g => `<div class="tile"><div class="k">${esc(g.name)}</div><div class="v">${usd(g.value)}</div>
     <div class="n"><span class="${cls(g.pct)}">${pct(g.pct)}</span>${g.irr != null ? '・IRR ' + pctPlain(g.irr) : ''}</div></div>`).join('')}</div>`;
+  h += cashSection('us');
   h += holdingsSection('c-us', all, usBroker, 'brokerSeg', usd, v => (v == null ? '—' : '$' + dec(v, 2)));
   h += txList(u.tx.slice(-12).reverse().map(x => ({
     arg: 'us:' + x.row, date: x.date, title: `${x.buy ? '買進' : x.sell ? '賣出' : ''} ${x.name}`, sub: `${esc(x.where)}・${x.buy || x.sell ? qty(x.buy || x.sell) + ' 股' : ''} @ ${x.price != null ? '$' + dec(x.price, 2) : '—'}`,
     right: x.buy ? `<span>買</span>` : x.sell ? '<span class="up">賣</span>' : '' })));
   return h;
+}
+
+// 閒置現金（Apps Script 第 16 版起回傳）：點一下可以改成券商 App 上的數字（例如收到股利）
+function cashSection(page, title = '閒置現金') {
+  const e = ed();
+  if (!e || !e.cash) return '';
+  const list = page ? e.cash.filter(a => a.page === page) : e.cash;
+  if (!list.length) return '';
+  const money = a => (a.cur === 'NTD' ? ntd(a.value) : a.cur === 'USD' ? usd(a.value, 2) : hidden ? MASK : dec(a.value || 0, 2) + ' USDT');
+  return `<div class="sec">${title}<span class="seclink" style="cursor:default;color:var(--text-muted)">點一下可以修改</span></div><div class="list">${list.map(a => `<div class="row link" data-form="cash" data-arg="${esc(a.id)}">
+    <div class="main"><div class="t1" style="font-size:15px">${esc(a.label)}</div></div><div class="r"><div class="t1" style="font-size:15px">${money(a)}</div></div><span class="chev">›</span></div>`).join('')}</div>`;
 }
 
 function txList(items) {
@@ -949,6 +962,7 @@ function pageTw(d) {
   </div>
   <div class="tiles">${all.groups.map(g => `<div class="tile"><div class="k">${esc(g.name)}</div><div class="v">${ntd(g.value)}</div>
     <div class="n"><span class="${cls(g.pct)}">${pct(g.pct)}</span>${g.irr != null ? '・IRR ' + pctPlain(g.irr) : ''}</div></div>`).join('')}</div>`;
+  h += cashSection('tw');
   h += holdingsSection('c-tw', all, twGroup, 'twSeg', ntd, v => (v == null ? '—' : dec(v, 1)));
   // 持股比重：同一檔股票（例如我的 0050 和小孩的 0050）合併計算
   const shown = all.items.filter(x => twGroup === 'all' || x.group === twGroup);
@@ -987,6 +1001,7 @@ function pageCrypto(d) {
     <span class="badge" style="background:var(${colors[g.name] || '--s1'})">${esc(g.name.slice(0, 1))}</span>
     <div class="main"><div class="t1">${esc(g.name)}</div><div class="t2">${qty(g.qty)} 顆・${[...new Set(g.where)].map(esc).join('、')}</div></div>
     <div class="r"><div class="t1">${ntd(g.value)}</div><div class="t2" style="color:var(--text-secondary)">$${g.price != null ? dec(g.price, g.price < 10 ? 3 : 0) : '—'}</div></div></div>`).join('')}</div>`;
+  h += cashSection('crypto');
   if (c.coins.length) {
     h += `<div class="sec">存放位置</div><div class="list">${c.coins.map(x => `<div class="row"><div class="main"><div class="t1" style="font-size:15px">${esc(x.name)}・${esc(x.where)}</div><div class="t2">${qty(x.qty)} 顆</div></div><div class="r"><div class="t1" style="font-size:15px">${ntd(x.value)}</div></div></div>`).join('')}</div>`;
   }
@@ -1077,6 +1092,7 @@ function pageKids(d) {
       ${b ? `<div class="kv"><span>台股現值</span><span>${ntd(b.value)}</span></div>
       <div class="kv"><span>台股報酬</span><span class="${cls(b.pct)}">${pct(b.pct)}</span></div>` : ''}</div>`;
   });
+  h += cashSection('more/kids', '美股帳戶閒置現金');
   if (w && w.plans.length) {
     h += `<div class="sec">台股定期定額（每人）</div><div class="list">${w.plans.map(p => `<div class="row">
       <div class="main"><div class="t1">${esc(p.name)}</div><div class="t2">每月 ${ntd(p.monthly)}・${esc(p.start)} 起・${p.months || 0} 個月</div></div>
