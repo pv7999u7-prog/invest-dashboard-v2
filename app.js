@@ -4,7 +4,7 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '2.6.0';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const APP_VERSION = '2.6.1';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
 const LATEST_SCRIPT = 20;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
@@ -425,7 +425,17 @@ function parseCareer(rows) {
     if (num(x[16])) cur.events.push({ raise: num(x[16]), raisePct: num(x[17]) ?? cur.raisePct, salary: num(x[12]) });
     take('bSalary', num(x[12])); take('bonus', num(x[13])); take('bonusMonths', num(x[14]));
     take('raise', num(x[16])); take('raisePct', num(x[17]));
-    [num(x[5]), num(x[12])].forEach(v => { if (v) salary = v; });
+    [num(x[5]), num(x[12])].forEach(v => { if (v) { salary = v; cur.lastSalary = v; } });
+  });
+  // 年收入那格（T、W 欄）還沒有公式，但已經填了年中分紅：先用試算表 2024 年的算法預估，畫面標示「預估」
+  //   年前分紅 ＋ 年中分紅 ＋ 年初月薪 × 6 ＋ 最新月薪 × 6（＋ 加班費）
+  years.forEach(y => {
+    if (y.annual || y.annualTotal || !y.bonus) return;
+    const first = y.salary || y.bSalary || y.lastSalary, last = y.lastSalary || first;
+    if (!first) return;
+    y.annual = (y.yeTotal || 0) + y.bonus + first * 6 + last * 6;
+    y.annualTotal = y.annual + (y.ot || 0);
+    y.estFirst = first; y.estLast = last; y.est = true;
   });
   return { years, salary };
 }
@@ -1206,13 +1216,14 @@ function pageCareer(d) {
   <div class="tiles t4">
     <div class="tile"><div class="k">${lastYe ? lastYe.year + ' ' : ''}年前分紅</div><div class="v">${lastYe ? wan(lastYe.yeTotal) : '—'}</div><div class="n">${lastYe && lastYe.yeTotalMonths ? dec(lastYe.yeTotalMonths, 1) + ' 個月・農曆年前' : '農曆年前'}</div></div>
     <div class="tile"><div class="k">${lastMid ? lastMid.year + ' ' : ''}年中分紅</div><div class="v">${lastMid ? wan(lastMid.bonus) : '—'}</div><div class="n">${lastMid && lastMid.bonusMonths ? dec(lastMid.bonusMonths, 1) + ' 個月・年中' : '年中'}</div></div>
-    <div class="tile"><div class="k">${lf ? lf.year + ' 年收入' : '年收入'}</div><div class="v">${lf ? wan(inc(lf)) : '—'}</div><div class="n">${lf && lf.ot ? '含加班 ' + wan(lf.ot) : ''}</div></div>
+    <div class="tile"><div class="k">${lf ? lf.year + ' 年收入' + (lf.est ? '（預估）' : '') : '年收入'}</div><div class="v">${lf ? wan(inc(lf)) : '—'}</div><div class="n">${lf && lf.ot ? '含加班 ' + wan(lf.ot) : ''}${lf && lf.est ? (lf.ot ? '・' : '') + '試算表還沒填年收入公式' : ''}</div></div>
     <div class="tile"><div class="k">年收入成長</div><div class="v ${cls(growth)}">${pct(growth)}</div><div class="n">${pf ? '比 ' + pf.year + ' 年' : ''}</div></div>
   </div>`;
 
   h += `<div class="card"><h3>年收入</h3><p class="cap">單位：萬元，含加班；點長條看年前、年中分紅明細</p>
     ${chart('c-income', el => columnChart(el, full.map(y => "'" + String(y.year).slice(2)), [{ name: '年收入', color: '--s1', values: full.map(y => inc(y) / 10000) }],
       { axis: v => dec(v, 0), topLabel: v => dec(v, 0), maxBar: 26, tip: i => { const y = full[i];
+        if (y.est) return `<b>${y.year}・預估</b>${tr('年前分紅', ntd(y.yeTotal || 0))}${tr('年中分紅', ntd(y.bonus))}${tr('月薪', (hidden ? MASK : int(y.estFirst) + '×6＋' + int(y.estLast) + '×6'))}${y.ot ? tr('加班', ntd(y.ot)) : ''}${tr('合計', ntd(y.annualTotal))}`;
         return `<b>${y.year}・${esc(y.title)}</b>${tr('年收入', ntd(y.annual))}${y.ot ? tr('加班', ntd(y.ot)) : ''}${y.annualTotal ? tr('合計', ntd(y.annualTotal)) : ''}${y.yeTotal ? tr('年前分紅', ntd(y.yeTotal)) : ''}${y.bonus ? tr('年中分紅', ntd(y.bonus)) : ''}${y.months ? tr('相當', dec(y.months, 1) + ' 個月') : ''}`; } }))}</div>`;
 
   const sal = ys.filter(y => y.salary || y.bSalary);
