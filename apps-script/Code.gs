@@ -8,7 +8,7 @@
 const KEY = '請改成你自己的密碼';
 
 // 程式碼版本（App 設定頁會顯示，用來確認部署的是不是最新版；這行不用改）
-const SCRIPT_VERSION = 19;
+const SCRIPT_VERSION = 20;
 
 // 要讀的工作表與範圍（試算表版面有大改時，才需要調整這裡）
 const RANGES = {
@@ -300,6 +300,7 @@ const ACTIONS = {
   },
 
   // 職涯：op 'mid' 年中分紅、'ye' 年前分紅（職務加給＋年終）、'year' 新增年度（調薪／升遷）、'title' 改職稱、
+  // 'ot' 某年的加班費（U 欄 Overtime；Y 欄另一組計算的 Overtime 也填同一個數字）、
   // 'event' 在某年底下加一列項目（例如「11月結構調薪」或自訂名稱，可以帶調整後月薪）、'eventSet' 改、'eventDel' 刪
   career(p) {
     const s = sh('BB'), info = careerInfo(), y = num(p.year);
@@ -348,6 +349,12 @@ const ACTIONS = {
       s.getRange(row, 2).setValue(label);
       if (sal) { s.getRange(row, 6).setValue(sal); s.getRange(row, 13).setValue(sal); }
       return `已新增 ${y} 年「${label}」`;
+    }
+    if (p.op === 'ot') {
+      const amt = need(p.amount, '加班費');
+      put(s.getRange(r.row, 21), amt);
+      put(s.getRange(r.row, 25), amt);
+      return `已記錄 ${y} 年加班費`;
     }
     if (p.op === 'mid') { put(s.getRange(r.row, 14), need(p.amount, '年中分紅')); putF(s.getRange(r.row, 15), `=IFERROR(N${r.row}/M${r.row},"")`); return `已記錄 ${y} 年中分紅`; }
     if (p.op === 'ye') {

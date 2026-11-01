@@ -4,8 +4,8 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '2.5.4';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
-const LATEST_SCRIPT = 19;   // 最新 Code.gs 的 SCRIPT_VERSION
+const APP_VERSION = '2.6.0';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const LATEST_SCRIPT = 20;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
 
@@ -1193,7 +1193,7 @@ function pageCareer(d) {
   const lastMid = ys.slice().reverse().find(y => y.bonus);
   let h = `${head('職涯與薪資')}
   ${ed() ? `<div class="acts wide"><button class="act" data-form="career" data-arg="ye">＋ 年前分紅</button><button class="act" data-form="career" data-arg="mid">＋ 年中分紅</button>
-    <button class="act" data-form="career" data-arg="raise">＋ 調薪升遷</button></div>` : ''}
+    <button class="act" data-form="career" data-arg="raise">＋ 調薪升遷</button><button class="act" data-form="career" data-arg="ot">＋ 加班費</button></div>` : ''}
   <div class="card hero">
     <div class="lbl">${last.year} 年・${esc(last.title)}</div>
     <div class="big">${hidden ? MASK : 'NT$' + int(c.salary) + '<span style="font-size:17px;font-weight:600;color:var(--text-secondary)"> / 月</span>'}</div>
@@ -1204,8 +1204,8 @@ function pageCareer(d) {
     </div>
   </div>
   <div class="tiles t4">
-    <div class="tile"><div class="k">${lastYe ? lastYe.year + ' ' : ''}年前分紅</div><div class="v">${lastYe ? wan(lastYe.yeTotal) : '—'}</div><div class="n">${lastYe && lastYe.yeTotalMonths ? lastYe.yeTotalMonths + ' 個月・農曆年前' : '農曆年前'}</div></div>
-    <div class="tile"><div class="k">${lastMid ? lastMid.year + ' ' : ''}年中分紅</div><div class="v">${lastMid ? wan(lastMid.bonus) : '—'}</div><div class="n">${lastMid && lastMid.bonusMonths ? lastMid.bonusMonths + ' 個月・年中' : '年中'}</div></div>
+    <div class="tile"><div class="k">${lastYe ? lastYe.year + ' ' : ''}年前分紅</div><div class="v">${lastYe ? wan(lastYe.yeTotal) : '—'}</div><div class="n">${lastYe && lastYe.yeTotalMonths ? dec(lastYe.yeTotalMonths, 1) + ' 個月・農曆年前' : '農曆年前'}</div></div>
+    <div class="tile"><div class="k">${lastMid ? lastMid.year + ' ' : ''}年中分紅</div><div class="v">${lastMid ? wan(lastMid.bonus) : '—'}</div><div class="n">${lastMid && lastMid.bonusMonths ? dec(lastMid.bonusMonths, 1) + ' 個月・年中' : '年中'}</div></div>
     <div class="tile"><div class="k">${lf ? lf.year + ' 年收入' : '年收入'}</div><div class="v">${lf ? wan(inc(lf)) : '—'}</div><div class="n">${lf && lf.ot ? '含加班 ' + wan(lf.ot) : ''}</div></div>
     <div class="tile"><div class="k">年收入成長</div><div class="v ${cls(growth)}">${pct(growth)}</div><div class="n">${pf ? '比 ' + pf.year + ' 年' : ''}</div></div>
   </div>`;
@@ -1213,7 +1213,7 @@ function pageCareer(d) {
   h += `<div class="card"><h3>年收入</h3><p class="cap">單位：萬元，含加班；點長條看年前、年中分紅明細</p>
     ${chart('c-income', el => columnChart(el, full.map(y => "'" + String(y.year).slice(2)), [{ name: '年收入', color: '--s1', values: full.map(y => inc(y) / 10000) }],
       { axis: v => dec(v, 0), topLabel: v => dec(v, 0), maxBar: 26, tip: i => { const y = full[i];
-        return `<b>${y.year}・${esc(y.title)}</b>${tr('年收入', ntd(y.annual))}${y.ot ? tr('加班', ntd(y.ot)) : ''}${y.annualTotal ? tr('合計', ntd(y.annualTotal)) : ''}${y.yeTotal ? tr('年前分紅', ntd(y.yeTotal)) : ''}${y.bonus ? tr('年中分紅', ntd(y.bonus)) : ''}${y.months ? tr('相當', y.months + ' 個月') : ''}`; } }))}</div>`;
+        return `<b>${y.year}・${esc(y.title)}</b>${tr('年收入', ntd(y.annual))}${y.ot ? tr('加班', ntd(y.ot)) : ''}${y.annualTotal ? tr('合計', ntd(y.annualTotal)) : ''}${y.yeTotal ? tr('年前分紅', ntd(y.yeTotal)) : ''}${y.bonus ? tr('年中分紅', ntd(y.bonus)) : ''}${y.months ? tr('相當', dec(y.months, 1) + ' 個月') : ''}`; } }))}</div>`;
 
   const sal = ys.filter(y => y.salary || y.bSalary);
   h += `<div class="card"><h3>月薪</h3><p class="cap">每年年初的月薪；點長條看當年調薪</p>
@@ -1227,7 +1227,7 @@ function pageCareer(d) {
     ${chart('c-bonus', el => columnChart(el, bm.map(y => "'" + String(y.year).slice(2)), [
       { name: '年前分紅', color: '--s4', values: bm.map(y => y.yeTotal / 10000) }, { name: '年中分紅', color: '--s5', values: bm.map(y => y.bonus / 10000) }],
       { axis: v => dec(v, 0), maxBar: 14, tip: i => { const y = bm[i];
-        return `<b>${y.year}</b>${y.yeTotal ? tr('年前分紅', ntd(y.yeTotal) + '（' + y.yeTotalMonths + ' 個月）') : ''}${y.allowance ? tr('　職務加給', ntd(y.allowance)) : ''}${y.yeBonus ? tr('　年終', ntd(y.yeBonus)) : ''}${y.bonus ? tr('年中分紅', ntd(y.bonus) + '（' + y.bonusMonths + ' 個月）') : ''}`; } }))}</div>`;
+        return `<b>${y.year}</b>${y.yeTotal ? tr('年前分紅', ntd(y.yeTotal) + '（' + dec(y.yeTotalMonths, 1) + ' 個月）') : ''}${y.allowance ? tr('　職務加給', ntd(y.allowance)) : ''}${y.yeBonus ? tr('　年終', ntd(y.yeBonus)) : ''}${y.bonus ? tr('年中分紅', ntd(y.bonus) + '（' + dec(y.bonusMonths, 1) + ' 個月）') : ''}`; } }))}</div>`;
 
   // 職位與調薪的時間軸
   const tl = [];

@@ -345,6 +345,13 @@ function formCareer(kind) {
     ye: { title: '年前分紅（農曆年前）', body: yearSel(last.year) + `<div class="row2">${fNum('allowance', '職務加給', '', '0')}${fNum('bonus', '年終（分紅）')}</div>` + hint('yeHint'),
       after: f => { f.querySelector('#yeHint').textContent = `合計 NT$${fmtN((nval(f, 'allowance') || 0) + (nval(f, 'bonus') || 0))}`; },
       submit: f => ['career', { op: 'ye', year: Number(val(f, 'year')), allowance: nval(f, 'allowance') || 0, bonus: req(nval(f, 'bonus'), '年終') }] },
+    // 加班費：某一年的加班費總額（BB 分頁 U、Y 欄），會加進那一年的年收入
+    ot: { title: '加班費', body: yearSel(last.year) + fNum('amount', '這一年的加班費總額') + hint('otHint'),
+      after: f => {
+        const y = ((state.data.career && state.data.career.years) || []).find(x => x.year === Number(val(f, 'year')));
+        f.querySelector('#otHint').textContent = (y && y.ot ? `目前記的是 ${fmtN(y.ot)}；` : '') + '填這一年的總額，會蓋掉原本的數字，並加進年收入';
+      },
+      submit: f => ['career', { op: 'ot', year: Number(val(f, 'year')), amount: req(nval(f, 'amount'), '加班費') }] },
     // 調薪升遷：一個表單三種類型，只顯示該類型要填的欄位
     //   年度調薪：新增下一年度，升遷時一起改職稱（op 'year'）；
     //   結構調薪、自訂項目：寫在那一年底下的新一列（op 'event'，結構調薪名稱自動是「11月結構調薪」）
