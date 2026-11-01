@@ -4,8 +4,8 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '2.6.4';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
-const LATEST_SCRIPT = 20;   // 最新 Code.gs 的 SCRIPT_VERSION
+const APP_VERSION = '2.7.0';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const LATEST_SCRIPT = 21;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
 
@@ -863,6 +863,7 @@ function pageOverview(d) {
     <div class="tile"><div class="k">${t.target ? t.target.year + ' 年底目標' : '年度目標'}</div><div class="v">${t.target ? wan(t.target.value) : '—'}</div><div class="n">${t.target ? (t.value >= t.target.value ? '已達成' : '還差 ' + wan(t.target.value - t.value)) : ''}</div></div>
   </div>`;
 
+  h += todayCard(d);
   h += `<div class="card"><h3>資產走勢</h3><p class="cap">總現值（藍）與累計投入成本（虛線）</p>
     <div class="seg" id="rangeSeg">${['6M', '1Y', 'ALL'].map(k => `<button data-r="${k}" class="${trendRange === k ? 'on' : ''}">${{ '6M': '6 個月', '1Y': '1 年', ALL: '全部' }[k]}</button>`).join('')}</div>
     ${chart('c-trend', el => trendChart(el, rangePts(t.series)))}</div>`;
@@ -886,6 +887,31 @@ function pageOverview(d) {
   }
   return h;
 }
+// 今日漲跌：Apps Script（第 21 版起）回傳每一檔的漲跌幅，乘上各帳戶持股現值；包含我的、定期定額、小孩帳戶
+// 每檔前一個交易日到現在：現值 − 現值÷(1＋漲跌幅)；美股換成台幣；抓不到價格的（例如上櫃股）略過
+function todayChange(d) {
+  const m = state.raw && state.raw._daily;
+  if (!m || !Object.keys(m).length) return null;
+  const fx = (d.total && d.total.fx) || 0;
+  const sum = (items, key, rate) => {
+    let ch = 0, base = 0, n = 0;
+    items.forEach(x => { const p = m[key(x)]; if (p == null || !x.value) return; const prev = x.value / (1 + p); ch += x.value - prev; base += prev; n++; });
+    return n ? { ch: ch * rate, pct: ch / base } : null;
+  };
+  return [
+    ['美股', d.usAll ? sum(d.usAll.items, x => 'US:' + str(x.code).toUpperCase(), fx) : null],
+    ['台股', d.twAll ? sum(d.twAll.items, x => 'TW:' + str(x.code), 1) : null],
+    ['加密貨幣', d.crypto ? sum(d.crypto.coins.filter(c => c.name !== 'USDT'), x => 'C:' + str(x.name).toUpperCase(), 1) : null]
+  ];
+}
+function todayCard(d) {
+  const t = todayChange(d);
+  if (!t) return '';
+  return `<div class="card"><h3>今日漲跌</h3><p class="cap">最近一個交易日，依目前持股計算（含定期定額、小孩帳戶）</p>
+    <div class="today">${t.map(([name, c]) => `<div><div class="k">${name}</div>
+      <div class="v ${c ? cls(c.pct) : ''}">${c ? pct(c.pct) : '—'}</div><div class="n">${c ? signedNtd(c.ch) : '還沒有價格'}</div></div>`).join('')}</div></div>`;
+}
+
 function allocLink(cat) {
   return { '美股': 'us', '台股': 'tw', '虛擬貨幣': 'crypto', "Kids' 台股": 'more/kids', "Kids' 美股": 'more/kids', '放貸': 'crypto' }[cat] || 'overview';
 }

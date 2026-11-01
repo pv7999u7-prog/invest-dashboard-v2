@@ -8,7 +8,7 @@
 const KEY = '請改成你自己的密碼';
 
 // 程式碼版本（App 設定頁會顯示，用來確認部署的是不是最新版；這行不用改）
-const SCRIPT_VERSION = 20;
+const SCRIPT_VERSION = 21;
 
 // 要讀的工作表與範圍（試算表版面有大改時，才需要調整這裡）
 const RANGES = {
@@ -98,6 +98,7 @@ function readAll() {
   data._sheetUrl = ss.getUrl();   // App「更多 → 原始資料」用來打開這份試算表
   data._scriptVersion = SCRIPT_VERSION;
   try { data._edit = editInfo(); } catch (err) { data._editError = String(err.message || err); }
+  try { data._daily = dailyChanges(); } catch (err) {}
   return data;
 }
 
@@ -749,6 +750,43 @@ function houseRows() {
   for (let i = 2; i < vals.length && String(vals[i][0]).trim() !== '房貸'; i++) {
     if (String(vals[i][0]).trim()) out.push({ row: i + 1, name: String(vals[i][0]).trim(), unit: num(vals[i][11]), park: num(vals[i][10]) });
   }
+  return out;
+}
+
+/* ================================================================
+   今日漲跌：隱藏的「App 漲跌」分頁，用 GOOGLEFINANCE 抓 Price 分頁每一檔的現價與昨收
+   回傳 { 'TW:2330': 0.012, 'US:QQQ': -0.004, 'C:BTC': 0.02 }（漲跌幅）；App 再用各帳戶持股現值算金額
+   第一次加進來的代號要等 GOOGLEFINANCE 抓到價格，下一次打開 App 才會有
+   ================================================================ */
+const DAILY_SHEET = 'App 漲跌';
+function dailyChanges() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet(), p = sh('Price'), keys = [];
+  p.getRange('A2:A200').getValues().forEach(r => { const c = String(r[0]).trim(); if (c) keys.push('TW:' + c); });
+  p.getRange('E2:E200').getValues().forEach(r => { const c = normCode(r[0]); if (c) keys.push('US:' + c); });
+  p.getRange('H2:H100').getValues().forEach(r => { const c = normCode(r[0]); if (c && c !== CRYPTO_CASH[0]) keys.push('C:' + c); });
+  let s = ss.getSheetByName(DAILY_SHEET);
+  if (!s) {
+    s = ss.insertSheet(DAILY_SHEET);
+    s.getRange(1, 1, 1, 3).setValues([['代號（App 用，請勿修改）', '現價', '昨收']]);
+    s.hideSheet();
+  }
+  const last = s.getLastRow(), have = last > 1 ? s.getRange(2, 1, last - 1, 1).getValues().map(r => String(r[0])) : [];
+  const add = keys.filter((k, i) => keys.indexOf(k) === i && have.indexOf(k) < 0);
+  if (add.length) {
+    // 台股：先試 TPE:代號，不行再補一個 0（試算表裡 00878 寫成 0878）；美股直接用代號；加密貨幣用前一天的歷史價格當昨收
+    const f = (k, r) => {
+      const code = `MID(A${r},${k.indexOf(':') + 2},20)`;
+      if (k.indexOf('TW:') === 0) return [`=IFERROR(GOOGLEFINANCE("TPE:"&${code}),IFERROR(GOOGLEFINANCE("TPE:0"&${code}),""))`,
+        `=IFERROR(GOOGLEFINANCE("TPE:"&${code},"closeyest"),IFERROR(GOOGLEFINANCE("TPE:0"&${code},"closeyest"),""))`];
+      if (k.indexOf('US:') === 0) return [`=IFERROR(GOOGLEFINANCE(${code}),"")`, `=IFERROR(GOOGLEFINANCE(${code},"closeyest"),"")`];
+      return [`=IFERROR(GOOGLEFINANCE("CURRENCY:"&${code}&"USD"),"")`, `=IFERROR(INDEX(GOOGLEFINANCE("CURRENCY:"&${code}&"USD","price",TODAY()-1),2,2),"")`];
+    };
+    const start = s.getLastRow() + 1;
+    s.getRange(start, 1, add.length, 3).setValues(add.map((k, i) => [k].concat(f(k, start + i))));
+    SpreadsheetApp.flush();
+  }
+  const out = {}, n = s.getLastRow() - 1;
+  if (n > 0) s.getRange(2, 1, n, 3).getValues().forEach(r => { const now = num(r[1]), prev = num(r[2]); if (now > 0 && prev > 0) out[String(r[0])] = now / prev - 1; });
   return out;
 }
 
