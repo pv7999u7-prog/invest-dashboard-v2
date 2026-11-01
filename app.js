@@ -4,7 +4,7 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '2.6.1';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const APP_VERSION = '2.6.2';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
 const LATEST_SCRIPT = 20;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
@@ -1202,8 +1202,8 @@ function pageCareer(d) {
   const lastYe = ys.slice().reverse().find(y => y.yeTotal);
   const lastMid = ys.slice().reverse().find(y => y.bonus);
   let h = `${head('職涯與薪資')}
-  ${ed() ? `<div class="acts wide"><button class="act" data-form="career" data-arg="ye">＋ 年前分紅</button><button class="act" data-form="career" data-arg="mid">＋ 年中分紅</button>
-    <button class="act" data-form="career" data-arg="raise">＋ 調薪升遷</button><button class="act" data-form="career" data-arg="ot">＋ 加班費</button></div>` : ''}
+  ${ed() ? `<div class="acts wide"><button class="act" data-form="career" data-arg="pay">＋ 分紅加班</button>
+    <button class="act" data-form="career" data-arg="raise">＋ 調薪升遷</button></div>` : ''}
   <div class="card hero">
     <div class="lbl">${last.year} 年・${esc(last.title)}</div>
     <div class="big">${hidden ? MASK : 'NT$' + int(c.salary) + '<span style="font-size:17px;font-weight:600;color:var(--text-secondary)"> / 月</span>'}</div>
