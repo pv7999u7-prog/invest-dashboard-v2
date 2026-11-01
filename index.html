@@ -41,8 +41,10 @@
   --shadow: 0 1px 0 rgba(255,255,255,.05) inset, 0 10px 30px rgba(0,0,0,.45);
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-html { background: var(--page); }
+html { background: var(--page); min-height: 100%; }
 html, body { margin: 0; }
+/* 頁面至少跟螢幕一樣高：內容少的頁面（例如我的定期定額），iPhone 主畫面 App 的底部分頁列才不會往上跑 */
+body { min-height: 100vh; min-height: 100dvh; box-sizing: border-box; }
 /* 背景光暈放在固定的底層，不用 background-attachment: fixed（iPhone 上會卡） */
 body::before {
   content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
