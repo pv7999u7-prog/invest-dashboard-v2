@@ -4,8 +4,8 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '2.7.0';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
-const LATEST_SCRIPT = 21;   // 最新 Code.gs 的 SCRIPT_VERSION
+const APP_VERSION = '2.8.0';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const LATEST_SCRIPT = 22;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
 
@@ -924,14 +924,15 @@ function rangePts(pts) {
 }
 
 function holdingRows(list, money) {
-  return list.map(x => `<div class="row">
+  return list.map(x => `<div class="row${x.form ? ' link' : ''}"${x.form ? ` data-form="${x.form}" data-arg="${esc(x.arg)}"` : ''}>
     <div class="main"><div class="t1">${esc(x.title)}</div><div class="t2">${x.sub}</div></div>
     <div class="r"><div class="t1">${money(x.value)}</div><div class="t2 ${cls(x.pct)}">${pct(x.pct)}</div></div></div>`).join('');
 }
 
 // 持股頁共用：分組按鈕、報酬率圖、明細
 const groupLabel = x => (x.owner ? x.group + '・' + x.owner : x.group);
-function holdingsSection(id, all, filter, segId, money, priceFmt) {
+// priceForm：點持股可以打開的表單（台股：更新現價），回傳 [表單, 參數] 或 null
+function holdingsSection(id, all, filter, segId, money, priceFmt, priceForm) {
   const names = all.groups.map(g => g.name);
   const list = all.items.filter(x => filter === 'all' || x.group === filter).sort((a, b) => b.pct - a.pct);
   return `<div class="card"><h3>個股報酬率</h3><p class="cap">點長條可看持股與損益</p>
@@ -939,7 +940,8 @@ function holdingsSection(id, all, filter, segId, money, priceFmt) {
     ${chart(id, el => divergingChart(el, list.map(x => ({ label: x.label, pct: x.pct,
       html: tr('帳戶', esc(groupLabel(x))) + tr('股數', qty(x.qty)) + tr('均價／現價', hidden ? MASK : priceFmt(x.avg) + '／' + priceFmt(x.price)) + tr('現值', money(x.value)) + tr('損益', money === ntd ? signedNtd(x.pl) : signedUsd(x.pl)) }))))}</div>
   <div class="sec">持股明細</div><div class="list">${holdingRows(list.slice().sort((a, b) => b.value - a.value).map(x => ({
-    title: x.label, value: x.value, pct: x.pct, sub: `${esc(groupLabel(x))}・${qty(x.qty)} 股・均價 ${hidden ? MASK : priceFmt(x.avg)}` })), money)}</div>`;
+    title: x.label, value: x.value, pct: x.pct, sub: `${esc(groupLabel(x))}・${qty(x.qty)} 股・均價 ${hidden ? MASK : priceFmt(x.avg)}${x.manual ? '・現價手動' : ''}`,
+    form: priceForm && priceForm(x) ? priceForm(x)[0] : null, arg: priceForm && priceForm(x) ? priceForm(x)[1] : null })), money)}</div>`;
 }
 
 function pageUs(d) {
@@ -1000,7 +1002,13 @@ function pageTw(d) {
   <div class="tiles">${all.groups.map(g => `<div class="tile"><div class="k">${esc(g.name)}</div><div class="v">${ntd(g.value)}</div>
     <div class="n"><span class="${cls(g.pct)}">${pct(g.pct)}</span>${g.irr != null ? '・IRR ' + pctPlain(g.irr) : ''}</div></div>`).join('')}</div>`;
   h += cashSection('tw');
-  h += holdingsSection('c-tw', all, twGroup, 'twSeg', ntd, v => (v == null ? '—' : dec(v, 1)));
+  // 我的台股持股：點一下可以手動填現價（上櫃等抓不到價格的）
+  const prices = (ed() && ed().tw && ed().tw.prices) || [];
+  const priceOf = x => (x.group === '我的' ? prices.find(q => q.code === str(x.code).toUpperCase()) : null);
+  all.items.forEach(x => { const p = priceOf(x); x.manual = !!(p && p.manual); });
+  h += holdingsSection('c-tw', all, twGroup, 'twSeg', ntd, v => (v == null ? '—' : dec(v, 1)),
+    x => (priceOf(x) ? ['twPrice', priceOf(x).code] : null));
+  if (prices.length) h += '<p class="hint" style="margin:-4px 4px 12px">點自己的持股可以手動填現價（上櫃等抓不到價格的股票）</p>';
   // 持股比重：同一檔股票（例如我的 0050 和小孩的 0050）合併計算
   const shown = all.items.filter(x => twGroup === 'all' || x.group === twGroup);
   const byName = {};

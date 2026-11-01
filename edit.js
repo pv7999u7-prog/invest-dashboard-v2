@@ -147,7 +147,7 @@ function formTrade(market) {
       fText('stock', tw ? '股號或股名' : '代號', '', tw ? '例如 2330 或 台積電' : '例如 NVDA', 'stockList') +
       `<datalist id="stockList">${list.join('')}</datalist>` +
       `<div class="row2">${fNum('price', '成交單價', '', tw ? '例如 1050' : '例如 185.5')}${fNum('qty', '股數', '', tw ? '例如 1000' : '例如 10')}</div>` +
-      hint('tradeHint') + fText('note', '備註'),
+      hint('tradeHint') + (tw ? fNum('mprice', '手動股價', '', '一般不用填', '上櫃等抓不到價格的股票才填') : '') + fText('note', '備註'),
     after(f) {
       const p = nval(f, 'price') || 0, q = nval(f, 'qty') || 0, buy = val(f, 'side') === 'buy';
       const cash = tw ? e.tw.cash : (e.us.brokers[val(f, 'broker')] || {}).cash;
@@ -163,7 +163,7 @@ function formTrade(market) {
     submit(f) {
       if (!val(f, 'stock')) throw new Error(tw ? '請填股號或股名' : '請填代號');
       return ['trade', { market, broker: tw ? '' : val(f, 'broker'), date: slash(val(f, 'date')), side: val(f, 'side'), stock: val(f, 'stock'),
-        price: req(nval(f, 'price'), '成交單價'), qty: req(nval(f, 'qty'), '股數'), note: val(f, 'note') }];
+        price: req(nval(f, 'price'), '成交單價'), qty: req(nval(f, 'qty'), '股數'), manualPrice: tw ? nval(f, 'mprice') || '' : '', note: val(f, 'note') }];
     }
   });
 }
@@ -222,6 +222,19 @@ function formCryptoFlow() {
       return ['cryptoFlow', { date: slash(val(f, 'date')), dir: val(f, 'dir'), source: src, usdt: req(nval(f, 'usdt'), 'USDT 數量'),
         ntd: twd ? req(nval(f, 'ntd'), '台幣金額') : '', note: val(f, 'note') }];
     }
+  });
+}
+
+/* ---------- 2c. 台股現價：上櫃等抓不到價格的股票手動填，也可以改回自動抓價 ---------- */
+function formTwPrice(code) {
+  const x = ((ed().tw && ed().tw.prices) || []).find(p => p.code === code);
+  if (!x) return;
+  openSheet({
+    title: `${esc(x.name)}・現價`, ok: '用這個價格',
+    body: `<p class="hint">目前 ${x.price ? fmtN(x.price, 2) : '抓不到價格'}（${x.manual ? '手動填的' : '自動抓價'}）。上櫃等抓不到價格的股票，在這裡填最新股價，持有期間可以隨時更新。</p>` +
+      fNum('price', '現價', x.manual ? x.price : ''),
+    submit: f => ['price', { code, price: req(nval(f, 'price'), '現價') }],
+    extra: x.manual ? [{ label: '改回自動抓價', cls: 'soft', run: () => ['price', { code, auto: true }] }] : []
   });
 }
 
@@ -523,7 +536,7 @@ function formCash(id) {
 }
 
 /* ---------- 綁定 ---------- */
-const FORMS = { cost: formCost, trade: formTrade, cryptoFlow: formCryptoFlow, dca: formDca, plan: formPlan, expense: formExpense, loan: formLoan, house: formHouse, milestone: formMilestone, career: formCareer, careerEvent: formCareerEvent, ledger: formLedger, cash: formCash };
+const FORMS = { cost: formCost, trade: formTrade, twPrice: formTwPrice, cryptoFlow: formCryptoFlow, dca: formDca, plan: formPlan, expense: formExpense, loan: formLoan, house: formHouse, milestone: formMilestone, career: formCareer, careerEvent: formCareerEvent, ledger: formLedger, cash: formCash };
 
 function bindEdit() {
   // ＋ 開頭的按鈕是「新增」：加號換成金色

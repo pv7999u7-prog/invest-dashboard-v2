@@ -8,7 +8,7 @@
 const KEY = '請改成你自己的密碼';
 
 // 程式碼版本（App 設定頁會顯示，用來確認部署的是不是最新版；這行不用改）
-const SCRIPT_VERSION = 21;
+const SCRIPT_VERSION = 22;
 
 // 要讀的工作表與範圍（試算表版面有大改時，才需要調整這裡）
 const RANGES = {
@@ -105,7 +105,10 @@ function readAll() {
 // App 輸入表單要用的現值與位置
 function editInfo() {
   const tw = sh('台股'), us = sh('美股');
-  const info = { tw: { cash: num(tw.getRange('C3').getValue()), holdings: holdings(tw) }, us: { brokers: {} }, dca: dcaItems() };
+  const twH = holdings(tw);
+  const info = { tw: { cash: num(tw.getRange('C3').getValue()), holdings: twH,
+    prices: twH.map(h => { const c = twPriceCell(tw, h); return { code: h.code, name: h.name, price: num(c.getValue()), manual: !c.getFormula() }; }) },
+    us: { brokers: {} }, dca: dcaItems() };
   Object.keys(BROKERS).forEach(b => {
     info.us.brokers[b] = { cash: num(us.getRange('C' + BROKERS[b]).getValue()), holdings: usHoldings(b) };
   });
@@ -160,7 +163,9 @@ const ACTIONS = {
     if (p.market === 'tw') {
       const s = sh('台股'), st = resolveTw(String(p.stock || '').trim());
       let h = holdings(s).find(x => x.code === st.code);
-      if (!h) { if (!buy) throw new Error('台股沒有持有 ' + st.code); h = addTwHolding(st, price); }
+      const manual = num(p.manualPrice);   // 上櫃等抓不到價格的股票，手動填的現價
+      if (!h) { if (!buy) throw new Error('台股沒有持有 ' + st.code); h = addTwHolding(st, price, manual); }
+      else if (manual > 0) put(twPriceCell(s, h), manual);
       if (!buy && qty > h.qty) throw new Error(`${st.name} 只有 ${h.qty} 股，不能賣 ${qty} 股`);
       if (buy) setAvg(s.getRange(h.row, 15), h.avg, h.qty, price, qty);
       const last = lastRowOf(s, 'A', '日期');
@@ -414,6 +419,22 @@ const ACTIONS = {
     return synced ? `${msg}；同一次出入金的另外 ${synced} 筆也改了日期、備註` : msg;
   },
 
+  // 台股現價：price 手動填（上櫃等抓不到的股票），auto: true 改回自動抓價（公式）
+  price(p) {
+    const s = sh('台股'), h = holdings(s).find(x => x.code === normCode(p.code || ''));
+    if (!h) throw new Error('台股沒有持有 ' + p.code);
+    const cell = twPriceCell(s, h);
+    if (p.auto) {
+      if (cell.getSheet().getName() !== 'Price') throw new Error(`${h.name} 的現價沒有連到 Price 分頁，請在試算表調整`);
+      putF(cell, twPriceFormula(cell.getRow()));
+      return `${h.name} 改回自動抓價`;
+    }
+    const v = need(p.price, '現價');
+    if (v <= 0) throw new Error('現價要大於 0');
+    put(cell, v);
+    return `已更新 ${h.name} 現價 ${v}`;
+  },
+
   // 閒置現金直接改成某個數字（例如收到股利、手續費和券商對帳）：id 見 cashAccounts
   cash(p) {
     const a = cashAccounts().find(x => x.id === p.id);
@@ -559,10 +580,23 @@ function usHoldings(broker) {
 }
 
 // 新的台股：Price 分頁加一列抓價格，持股清單加一列（公式照上一列）
-function addTwHolding(st, price) {
+// 台股現價的公式：先試 TPE:代號，再試前面補 0（00878 寫成 0878），最後試 Yahoo 的上櫃頁面
+function twPriceFormula(row) {
+  return `=IFERROR(GOOGLEFINANCE("TPE:"&A${row}),IFERROR(GOOGLEFINANCE("TPE:0"&A${row}),IFERROR(VALUE(IMPORTXML("https://tw.stock.yahoo.com/quote/"&A${row}&".TWO","//span[contains(@class,'Fz(32px)')]")),"")))`;
+}
+
+// 某一檔台股的現價格子：持股清單 N 欄是 =Price!C5 這種公式就指到 Price 分頁那格，不然就是 N 欄本身
+function twPriceCell(s, h) {
+  const m = String(s.getRange(h.row, 14).getFormula()).match(/^=\s*Price!\$?C\$?(\d+)\s*$/i);
+  return m ? sh('Price').getRange(Number(m[1]), 3) : s.getRange(h.row, 14);
+}
+
+// manual：手動現價（上櫃等抓不到的），有填就寫數字，不放公式
+function addTwHolding(st, price, manual) {
   const p = sh('Price'), pr = firstEmpty(p, 'A', 2);
   putVs(fmtCell(p.getRange(pr, 1, 1, 2), '@'), [[st.code, st.name]]);
-  putF(p.getRange(pr, 3), `=IFERROR(GOOGLEFINANCE("TPE:"&A${pr}),IFERROR(VALUE(IMPORTXML("https://tw.stock.yahoo.com/quote/"&A${pr}&".TWO","//span[contains(@class,'Fz(32px)')]")),""))`);
+  if (manual > 0) put(p.getRange(pr, 3), manual);
+  else putF(p.getRange(pr, 3), twPriceFormula(pr));
   const s = sh('台股'), list = holdings(s), last = list[list.length - 1].row;
   s.insertRowBefore(last);
   s.getRange(last + 1, 9, 1, 9).copyTo(s.getRange(last, 9, 1, 9));
