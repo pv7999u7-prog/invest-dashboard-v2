@@ -4,7 +4,7 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '3.1.2';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const APP_VERSION = '3.1.3';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
 const LATEST_SCRIPT = 25;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
@@ -182,7 +182,12 @@ function parseUs(rows) {
 }
 
 function parseCrypto(rows) {
-  const out = { totalUSD: num(cell(rows, 1, 4)), total: num(cell(rows, 1, 5)), coins: [], realized: [] };
+  const out = { totalUSD: num(cell(rows, 1, 4)), total: num(cell(rows, 1, 5)), coins: [], realized: [], memo: [] };
+  // 時間備忘：幣分頁 T、U 欄（例如「預期下次減半時間｜2028年4月」），只有一欄有字也列
+  for (let r = 0; r < Math.min(rows.length, 20); r++) {
+    const k = str(cell(rows, r, 19)), v = str(cell(rows, r, 20));
+    if (k || v) out.memo.push({ k, v });
+  }
   for (let r = 3; r < rows.length; r++) {
     const x = rows[r], q = num(x[2]);
     if (!str(x[0]) || !q) continue;
@@ -1074,6 +1079,11 @@ function pageCrypto(d) {
     <span class="badge" style="background:var(${colors[g.name] || '--s1'})">${esc(g.name.slice(0, 1))}</span>
     <div class="main"><div class="t1">${esc(g.name)}</div><div class="t2">${qty(g.qty)} 顆・${[...new Set(g.where)].map(esc).join('、')}</div></div>
     <div class="r"><div class="t1">${ntd(g.value)}</div><div class="t2" style="color:var(--text-secondary)">$${g.price != null ? dec(g.price, g.price < 10 ? 3 : 0) : '—'}</div></div></div>`).join('')}</div>`;
+  if (c.memo && c.memo.length) {
+    h += `<div class="sec">時間備忘</div><div class="card">${c.memo.map(m => m.k
+      ? `<div class="kv"><span>${esc(m.k)}</span><span>${esc(m.v)}</span></div>`
+      : `<p class="cap" style="margin:8px 0 0">${esc(m.v)}</p>`).join('')}</div>`;
+  }
   h += cashSection('crypto');
   if (c.coins.length) {
     h += `<div class="sec">存放位置</div><div class="list">${c.coins.map(x => `<div class="row"><div class="main"><div class="t1" style="font-size:15px">${esc(x.name)}・${esc(x.where)}</div><div class="t2">${qty(x.qty)} 顆</div></div><div class="r"><div class="t1" style="font-size:15px">${ntd(x.value)}</div></div></div>`).join('')}</div>`;
