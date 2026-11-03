@@ -475,7 +475,16 @@ function formLedger(arg) {
     openSheet({
       title: '修改資金異動', ok: '儲存修改', extra: [del],
       body: fSeg('dir', [['in', '投入'], ['out', '撤出']], x.flow < 0 ? 'in' : 'out') + fDate('date', '日期', dash(x.date)) +
-        fNum('amt', '金額（台幣）', Math.abs(x.flow)) + fText('note', '備註', x.note) + linkHint(links),
+        fNum('amt', '金額（台幣）', Math.abs(x.flow)) + fText('note', '備註', x.note) + linkHint(links) + hint('sumHint'),
+      // 改了總額，但其他帳戶的金額都沒動：提醒一起改（不自動改）
+      after(f) {
+        if (!links.length) return;
+        const fx = (ed() && ed().fx) || 0, a = nval(f, 'amt') || 0;
+        const sum = links.reduce((t, l, i) => t + (nval(f, 'la' + i) || 0) * (l.k === 'us' || l.k === 'crypto' ? fx : 1), 0);
+        const totalChanged = Math.abs(a - Math.abs(x.flow)) > 0.5, linkChanged = links.some((l, i) => Math.abs((nval(f, 'la' + i) || 0) - linkOld(l)) > 0.004);
+        f.querySelector('#sumHint').innerHTML = `各帳戶合計約 NT$${fmtN(sum)}，總額 NT$${fmtN(a)}` + (Math.abs(sum - a) >= 1 ? `，差 NT$${fmtN(Math.abs(a - sum))}` : '') +
+          (totalChanged && !linkChanged ? '<br><b style="color:#f5c04a">總額改了，各帳戶金額也要記得改</b>' : '');
+      },
       submit: f => { const a = req(nval(f, 'amt'), '金額'); return edit({ date: slash(val(f, 'date')), flow: val(f, 'dir') === 'in' ? -a : a, note: val(f, 'note') }, f); }
     });
     return;
