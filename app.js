@@ -4,7 +4,7 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '3.1.0';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const APP_VERSION = '3.1.1';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
 const LATEST_SCRIPT = 25;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
@@ -1060,7 +1060,7 @@ function pageCrypto(d) {
   c.coins.forEach(x => { (groups[x.name] = groups[x.name] || { name: x.name, qty: 0, usd: 0, value: 0, price: x.price, where: [] }); const g = groups[x.name]; g.qty += x.qty; g.usd += x.usd || 0; g.value += x.value || 0; g.where.push(x.where); });
   const gl = Object.values(groups).sort((a, b) => b.value - a.value);
   const colors = { BTC: '--s4', ETH: '--s7', SOL: '--s3', DOGE: '--s2' };
-  let h = `${head('加密貨幣', [['＋ 買賣', 'trade', 'crypto'], ['＋ 出入金', 'cryptoFlow']])}
+  let h = `${head('加密貨幣', [['＋ 買賣', 'trade', 'crypto']])}
   <div class="card hero">
     <div class="lbl">加密貨幣總值</div>
     <div class="big">${ntd(c.total)}</div>
