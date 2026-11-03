@@ -4,8 +4,8 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '2.8.2';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
-const LATEST_SCRIPT = 22;   // 最新 Code.gs 的 SCRIPT_VERSION
+const APP_VERSION = '2.9.0';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const LATEST_SCRIPT = 23;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
 
@@ -1388,6 +1388,14 @@ function pageMilestone(d) {
   <div class="card"><ul class="tl">${list.slice().reverse().map(m => `<li${e ? ` class="link" data-form="milestone" data-arg="${m.row}"` : ''}><div class="d">${esc(m.date)}</div><div class="x">${esc(m.text)}</div></li>`).join('')}</ul></div>`;
 }
 
+// 即時股價的狀態（Apps Script 第 23 版起）：上次抓的時間、美股的 Finnhub 金鑰有沒有設定
+function liveLine() {
+  const l = state.raw && state.raw._live;
+  if (!l) return '';
+  const t = l.at ? new Date(l.at) : null;
+  const when = t ? `${t.getMonth() + 1}/${t.getDate()} ${pad(t.getHours())}:${pad(t.getMinutes())}` : '還沒抓過';
+  return `<p class="msg" style="margin:4px 0 0;text-align:center;color:var(--text-muted)">即時股價：${when}・台股證交所、加密貨幣 Kraken・美股 ${l.finnhub ? 'Finnhub' : '未設定 Finnhub 金鑰（用 GOOGLEFINANCE）'}</p>`;
+}
 function pageSettings(first) {
   const c = state.cfg || {};
   return `<h1 class="title">${first ? '開始使用' : '設定'}</h1>
@@ -1401,6 +1409,7 @@ function pageSettings(first) {
     <p class="msg" id="cfgMsg" style="margin:10px 0 0">${state.status === 'err' ? '<span class="msg err">' + esc(state.error) + '</span>' : state.updated ? '上次更新：' + esc(state.updated) : ''}</p>
     ${first ? '' : '<button class="btn ghost" id="cfgClear">清除這台裝置上的資料與設定</button>'}
     <p class="msg" style="margin:12px 0 0;text-align:center;color:var(--text-muted)">App 版本 ${APP_VERSION}${state.raw ? `・Apps Script 第 ${scriptVersion()} 版${scriptVersion() < LATEST_SCRIPT ? `（最新是第 ${LATEST_SCRIPT} 版，請更新）` : '（最新）'}` : ''}</p>
+    ${liveLine()}
   </div>
   ${first ? '' : securitySection(canBio)}`;
 }

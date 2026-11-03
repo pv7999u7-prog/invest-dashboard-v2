@@ -8,7 +8,7 @@
 const KEY = '請改成你自己的密碼';
 
 // 程式碼版本（App 設定頁會顯示，用來確認部署的是不是最新版；這行不用改）
-const SCRIPT_VERSION = 22;
+const SCRIPT_VERSION = 23;
 
 // 要讀的工作表與範圍（試算表版面有大改時，才需要調整這裡）
 const RANGES = {
@@ -43,6 +43,8 @@ function doPost(e) {
     return json({ ok: false, error: 'unauthorized' });
   }
   ensureTrigger();
+  try { ensureLiveTrigger(); } catch (err) {}
+  try { refreshLive(false); } catch (err) {}
   if (body.action) {
     const lock = LockService.getScriptLock();
     lock.waitLock(20000);
@@ -99,6 +101,7 @@ function readAll() {
   data._scriptVersion = SCRIPT_VERSION;
   try { data._edit = editInfo(); } catch (err) { data._editError = String(err.message || err); }
   try { data._daily = dailyChanges(); } catch (err) {}
+  try { data._live = liveInfo(); } catch (err) {}
   return data;
 }
 
@@ -460,6 +463,16 @@ function ensureTrigger() {
   props.setProperty('trigger-v1', '1');
 }
 
+// 即時價每 10 分鐘自動更新一次（不開 App 時試算表也是新的）
+function ensureLiveTrigger() {
+  const props = PropertiesService.getScriptProperties();
+  if (props.getProperty('trigger-live-v1')) return;
+  ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'liveJob').forEach(t => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger('liveJob').timeBased().everyMinutes(10).create();
+  props.setProperty('trigger-live-v1', '1');
+}
+function liveJob() { refreshLive(true); }
+
 function dailyJob() {
   const ss = SpreadsheetApp.getActiveSpreadsheet(), tz = ss.getSpreadsheetTimeZone();
   const d = new Date(), dow = Utilities.formatDate(d, tz, 'u'), md = Utilities.formatDate(d, tz, 'MM/dd');
@@ -582,7 +595,7 @@ function usHoldings(broker) {
 // 新的台股：Price 分頁加一列抓價格，持股清單加一列（公式照上一列）
 // 台股現價的公式：先試 TPE:代號，再試前面補 0（00878 寫成 0878），最後試 Yahoo 的上櫃頁面
 function twPriceFormula(row) {
-  return `=IFERROR(GOOGLEFINANCE("TPE:"&A${row}),IFERROR(GOOGLEFINANCE("TPE:0"&A${row}),IFERROR(VALUE(IMPORTXML("https://tw.stock.yahoo.com/quote/"&A${row}&".TWO","//span[contains(@class,'Fz(32px)')]")),"")))`;
+  return liveWrap(`"TW:"&A${row}`, `IFERROR(GOOGLEFINANCE("TPE:"&A${row}),IFERROR(GOOGLEFINANCE("TPE:0"&A${row}),IFERROR(VALUE(IMPORTXML("https://tw.stock.yahoo.com/quote/"&A${row}&".TWO","//span[contains(@class,'Fz(32px)')]")),"")))`);
 }
 
 // 某一檔台股的現價格子：持股清單 N 欄是 =Price!C5 這種公式就指到 Price 分頁那格，不然就是 N 欄本身
@@ -615,7 +628,7 @@ function addUsHolding(broker, code, price) {
   if (pr < 2) {
     pr = firstEmpty(p, 'E', 2);
     put(p.getRange(pr, 5), code);
-    putF(p.getRange(pr, 6), `=GOOGLEFINANCE("${code}")`);
+    putF(p.getRange(pr, 6), liveWrap(`"US:"&UPPER(E${pr})`, `GOOGLEFINANCE("${code}")`));
   }
   const s = sh('美股'), list = usHoldings(broker), last = list[list.length - 1].row;
   s.insertRowBefore(last);
@@ -744,7 +757,7 @@ function addCryptoRow(coin, where, price) {
     if (pr < 2) {
       pr = firstEmpty(p, 'H', 2);
       put(p.getRange(pr, 8), coin);
-      putF(p.getRange(pr, 9), `=IFERROR(GOOGLEFINANCE("CURRENCY:"&H${pr}&"USD"),${price})`);
+      putF(p.getRange(pr, 9), liveWrap(`"C:"&UPPER(H${pr})`, `IFERROR(GOOGLEFINANCE("CURRENCY:"&H${pr}&"USD"),${price})`));
     }
     priceCell = `=Price!I${pr}`;
   }
@@ -788,6 +801,131 @@ function houseRows() {
 }
 
 /* ================================================================
+   即時價：台股用證交所公開報價、美股用 Finnhub（要金鑰）、加密貨幣用 Kraken
+   抓到的價格寫在隱藏分頁「App 即時價」（代號、現價、昨收、抓取時間）。
+   Price 分頁的價格公式會包一層：一小時內抓過的即時價優先，抓不到或太舊就用原本的公式（GOOGLEFINANCE 等）。
+   App 連線時超過 1 分鐘沒更新就先抓一次，另外每 10 分鐘自動更新。
+   Finnhub 金鑰放在 Apps Script「專案設定 → 指令碼屬性」的 FINNHUB_KEY，不寫在程式碼裡。
+   ================================================================ */
+const LIVE_SHEET = 'App 即時價';
+
+// 價格公式外面包一層即時價：keyExpr 是算出代號的公式片段，orig 是原本的公式（不含 =）
+function liveWrap(keyExpr, orig) {
+  const ref = `'${LIVE_SHEET}'!$A:$D`;
+  return `=LET(k,${keyExpr},v,IFERROR(VLOOKUP(k,${ref},2,FALSE),""),t,IFERROR(VLOOKUP(k,${ref},4,FALSE),0),` +
+    `IF(AND(ISNUMBER(v),v>0,NOW()-t<1/24),v,${orig}))`;
+}
+
+function liveSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let s = ss.getSheetByName(LIVE_SHEET);
+  if (!s) {
+    s = ss.insertSheet(LIVE_SHEET);
+    s.getRange(1, 1, 1, 4).setValues([['代號（App 用，請勿修改）', '現價', '昨收', '抓取時間']]);
+    s.hideSheet();
+  }
+  return s;
+}
+
+// { 'TW:2330': {price, prev, at(毫秒)} }
+function liveRows() {
+  const s = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(LIVE_SHEET), out = {};
+  if (!s || s.getLastRow() < 2) return out;
+  s.getRange(2, 1, s.getLastRow() - 1, 4).getValues().forEach(r => {
+    out[String(r[0])] = { price: num(r[1]), prev: num(r[2]), at: r[3] instanceof Date ? r[3].getTime() : 0 };
+  });
+  return out;
+}
+
+function refreshLive(force) {
+  const props = PropertiesService.getScriptProperties();
+  if (!force && Date.now() - Number(props.getProperty('live-at') || 0) < 60 * 1000) return;
+  props.setProperty('live-at', String(Date.now()));
+  const p = sh('Price'), uniq = a => a.filter((x, i) => x && a.indexOf(x) === i);
+  const tw = uniq(p.getRange('A2:A200').getValues().map(r => String(r[0]).trim()));
+  const us = uniq(p.getRange('E2:E200').getValues().map(r => normCode(r[0])));
+  const cr = uniq(p.getRange('H2:H100').getValues().map(r => normCode(r[0]))).filter(c => c !== CRYPTO_CASH[0]);
+  let rows = [];
+  try { rows = rows.concat(liveTw(tw)); } catch (err) {}
+  try { rows = rows.concat(liveUs(us, props.getProperty('FINNHUB_KEY'))); } catch (err) {}
+  try { rows = rows.concat(liveCrypto(cr)); } catch (err) {}
+  const s = liveSheet(), now = new Date();
+  const last = s.getLastRow(), keys = last > 1 ? s.getRange(2, 1, last - 1, 1).getValues().map(r => String(r[0])) : [];
+  const vals = last > 1 ? s.getRange(2, 1, last - 1, 4).getValues() : [];
+  rows.forEach(x => {
+    const i = keys.indexOf(x.key), row = [x.key, x.price, x.prev || '', now];
+    if (i >= 0) vals[i] = row; else { keys.push(x.key); vals.push(row); }
+  });
+  if (vals.length) s.getRange(2, 1, vals.length, 4).setValues(vals);
+  wrapPriceFormulas();
+}
+
+// 證交所 MIS：每個代號同時查上市（tse）和上櫃（otc）；試算表裡 00878 寫成 0878，也補 0 查
+function liveTw(codes) {
+  if (!codes.length) return [];
+  const want = [];
+  codes.forEach(c => { [c].concat(/^0\d{3}$/.test(c) ? ['0' + c] : []).forEach(v => { want.push(`tse_${v}.tw`, `otc_${v}.tw`); }); });
+  const out = {};
+  for (let i = 0; i < want.length; i += 40) {
+    const url = 'https://mis.twse.com.tw/stock/api/getStockInfo.jsp?json=1&delay=0&ex_ch=' + encodeURIComponent(want.slice(i, i + 40).join('|'));
+    const res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, headers: { 'User-Agent': 'Mozilla/5.0' } });
+    if (res.getResponseCode() !== 200) continue;
+    (JSON.parse(res.getContentText()).msgArray || []).forEach(m => {
+      if (!m.c) return;
+      const code = codes.find(c => c === m.c || '0' + c === m.c);
+      if (!code) return;
+      const bid = num(String(m.b || '').split('_')[0]);
+      const price = num(m.z) || bid || num(m.y);   // 剛好沒成交時 z 是 -，用買進價，再不行用昨收
+      if (price > 0) out[code] = { key: 'TW:' + code, price, prev: num(m.y) };
+    });
+  }
+  return Object.keys(out).map(k => out[k]);
+}
+
+// Finnhub：每個代號一次；沒有金鑰就不抓（維持原本的 GOOGLEFINANCE）
+function liveUs(codes, key) {
+  if (!key || !codes.length) return [];
+  const res = UrlFetchApp.fetchAll(codes.map(c => ({ url: `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(c)}&token=${encodeURIComponent(key)}`, muteHttpExceptions: true })));
+  const out = [];
+  res.forEach((r, i) => {
+    try { const j = JSON.parse(r.getContentText()); if (num(j.c) > 0) out.push({ key: 'US:' + codes[i], price: num(j.c), prev: num(j.pc) }); } catch (err) {}
+  });
+  return out;
+}
+
+// Kraken：現價 c[0]；「昨收」用當天開盤價 o（加密貨幣沒有收盤）
+function liveCrypto(coins) {
+  if (!coins.length) return [];
+  const res = UrlFetchApp.fetchAll(coins.map(c => ({ url: 'https://api.kraken.com/0/public/Ticker?pair=' + c + 'USD', muteHttpExceptions: true })));
+  const out = [];
+  res.forEach((r, i) => {
+    try {
+      const j = JSON.parse(r.getContentText()), k = j.result && Object.keys(j.result)[0];
+      if (k && num(j.result[k].c[0]) > 0) out.push({ key: 'C:' + coins[i], price: num(j.result[k].c[0]), prev: num(j.result[k].o) });
+    } catch (err) {}
+  });
+  return out;
+}
+
+// Price 分頁的價格公式還沒包即時價的，包上去（手動填的數字不動）
+function wrapPriceFormulas() {
+  const p = sh('Price');
+  [['A', 3, 'TW:', c => `A${c}`], ['E', 6, 'US:', c => `UPPER(E${c})`], ['H', 9, 'C:', c => `UPPER(H${c})`]].forEach(([col, pc, prefix, keyOf]) => {
+    const codes = p.getRange(`${col}2:${col}200`).getValues(), f = p.getRange(2, pc, 199, 1).getFormulas();
+    codes.forEach((r, i) => {
+      const row = i + 2, old = f[i][0];
+      if (!String(r[0]).trim() || !old || old.indexOf(LIVE_SHEET) >= 0) return;
+      p.getRange(row, pc).setFormula(liveWrap(`"${prefix}"&${keyOf(row)}`, old.replace(/^=/, '')));
+    });
+  });
+}
+
+function liveInfo() {
+  const props = PropertiesService.getScriptProperties();
+  return { at: Number(props.getProperty('live-at') || 0), finnhub: !!props.getProperty('FINNHUB_KEY') };
+}
+
+/* ================================================================
    今日漲跌：隱藏的「App 漲跌」分頁，用 GOOGLEFINANCE 抓 Price 分頁每一檔的現價與昨收
    回傳 { 'TW:2330': 0.012, 'US:QQQ': -0.004, 'C:BTC': 0.02 }（漲跌幅）；App 再用各帳戶持股現值算金額
    第一次加進來的代號要等 GOOGLEFINANCE 抓到價格，下一次打開 App 才會有
@@ -821,6 +959,9 @@ function dailyChanges() {
   }
   const out = {}, n = s.getLastRow() - 1;
   if (n > 0) s.getRange(2, 1, n, 3).getValues().forEach(r => { const now = num(r[1]), prev = num(r[2]); if (now > 0 && prev > 0) out[String(r[0])] = now / prev - 1; });
+  // 即時價（證交所、Finnhub、Kraken）一小時內抓過的，優先用它的現價和昨收
+  const live = liveRows(), fresh = Date.now() - 3600 * 1000;
+  Object.keys(live).forEach(k => { const x = live[k]; if (x.at >= fresh && x.price > 0 && x.prev > 0) out[k] = x.price / x.prev - 1; });
   return out;
 }
 
