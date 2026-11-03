@@ -8,7 +8,7 @@
 const KEY = '請改成你自己的密碼';
 
 // 程式碼版本（App 設定頁會顯示，用來確認部署的是不是最新版；這行不用改）
-const SCRIPT_VERSION = 23;
+const SCRIPT_VERSION = 24;
 
 // 要讀的工作表與範圍（試算表版面有大改時，才需要調整這裡）
 const RANGES = {
@@ -406,10 +406,30 @@ const ACTIONS = {
     const shift = L.unapply(s, old) || 0;   // 加新股票時，持股清單多一列，交易表會往下移
     row += shift;
     const msg = L.write(s, row, d, old) || '已更新這筆' + L.label;
-    // 日期、備註改了，同一組的其他筆一起改（金額怎麼分到各帳戶沒辦法自動推算，不連動）
+    // 同一組其他帳戶的金額：App 在資金異動表單一起填的（linkAmounts: [{k, r, amount}]，金額正數，方向照原本）
     const nd = d.date ? toDate(d.date) : null, nn = d.note != null ? String(d.note) : null;
     let synced = 0;
+    const done = {};
+    (p.linkAmounts || []).forEach(la => {
+      const g = group.find(x => x.k === la.k && x.r === num(la.r));
+      if (!g) return;
+      const amt = need(la.amount, '金額');
+      if (amt <= 0) throw new Error('金額要大於 0');
+      const L2 = LEDGERS[g.k], s2 = sh(L2.sheet);
+      let r2 = g.r;
+      if (shift && L2.sheet === L.sheet && r2 > row - shift) r2 += shift;
+      const sign = (g.k === 'crypto' ? g.x.usdt : g.x.flow) < 0 ? -1 : 1;
+      const date = d.date || g.x.date, note = nn != null ? nn : g.x.note;   // 文字日期，write 會自己轉
+      L2.unapply(s2, g.x);
+      if (g.k === 'crypto') L2.write(s2, r2, { date, usdt: sign * amt, note }, g.x);
+      else if (g.k === 'flow') L2.write(s2, r2, { date, flow: sign * amt, note }, g.x);
+      else L2.write(s2, r2, { date, type: sign < 0 ? 'in' : 'out', broker: g.x.b, amount: amt, note }, g.x);
+      done[g.k + ':' + g.r] = true;
+      synced++;
+    });
+    // 日期、備註改了，同一組的其他筆一起改
     group.forEach(g => {
+      if (done[g.k + ':' + g.r]) return;
       const L2 = LEDGERS[g.k], s2 = sh(L2.sheet);
       let r2 = g.r;
       if (shift && L2.sheet === L.sheet && r2 > row - shift) r2 += shift;
@@ -419,7 +439,7 @@ const ACTIONS = {
       if (nn != null) put(s2.getRange(r2, L2.noteCol), nn);
       synced++;
     });
-    return synced ? `${msg}；同一次出入金的另外 ${synced} 筆也改了日期、備註` : msg;
+    return synced ? `${msg}；同一次出入金的另外 ${synced} 筆也一起改了` : msg;
   },
 
   // 台股現價：price 手動填（上櫃等抓不到的股票），auto: true 改回自動抓價（公式）

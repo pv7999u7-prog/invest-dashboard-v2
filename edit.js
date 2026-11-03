@@ -446,9 +446,18 @@ const linkedName = ({ k, y }) => (k === 'flow' ? `資金異動 ${y.flow < 0 ? '�
   : k === 'tw' ? `台股 ${y.flow < 0 ? '入金' : '出金'} ${fmtN(Math.abs(y.flow))}`
   : k === 'us' ? `美股 ${y.b} ${y.flow < 0 ? '入金' : '出金'} US$${fmtN(Math.abs(y.flow), 2)}`
   : `加密貨幣 ${y.type} ${fmtN(Math.abs(y.usdt || 0), 2)} USDT`);
+// 同一次出入金的其他帳戶：每一筆一格金額，可以一起改；日期、備註會一起改，刪除會一起刪
+const linkUnit = ({ k, y }) => (k === 'flow' ? '資金異動（台幣）' : k === 'tw' ? `台股${y.flow < 0 ? '入金' : '出金'}（台幣）`
+  : k === 'us' ? `美股 ${y.b} ${y.flow < 0 ? '入金' : '出金'}（美金）` : `加密貨幣 ${y.type}（USDT）`);
+const linkOld = ({ k, y }) => Math.abs(k === 'crypto' ? y.usdt || 0 : y.flow || 0);
 const linkHint = links => (links.length
-  ? `<p class="hint">同一次出入金還記在：${links.map(l => esc(linkedName(l))).join('、')}。<br>刪除會一起刪；改日期或備註也會一起改；金額要各自改。</p>`
+  ? `<div class="grp">同一次出入金的其他帳戶<em>金額可以一起改；日期、備註會一起改；刪除會一起刪</em></div>` +
+    links.map((l, i) => fNum('la' + i, linkUnit(l), linkOld(l))).join('')
   : '');
+// 有改到的其他帳戶金額 → [{k, r, amount}]
+const linkAmounts = (f, links) => links.map((l, i) => ({ k: l.k, r: l.y.row, amount: nval(f, 'la' + i) }))
+  .filter((a, i) => a.amount != null && Math.abs(a.amount - linkOld(links[i])) > 0.004)
+  .map(a => { if (!(a.amount > 0)) throw new Error('金額要大於 0'); return a; });
 
 function formLedger(arg) {
   const [kind, r] = String(arg).split(':'), row = Number(r);
@@ -460,14 +469,14 @@ function formLedger(arg) {
     ? `會一起刪除同一次出入金的另外 ${links.length} 筆：\n${links.map(linkedName).join('\n')}\n\n確定要刪除嗎？刪錯了可以按復原。`
     : '確定要刪除這筆嗎？刪錯了可以在「明細與復原」按復原。';
   const del = { label: links.length ? `刪除這筆（連同另外 ${links.length} 筆）` : '刪除這筆', run: () => (confirm(ask) ? ['ledger', Object.assign({ op: 'del' }, base)] : null) };
-  const edit = data => ['ledger', Object.assign({ op: 'edit', data }, base)];
+  const edit = (data, f) => ['ledger', Object.assign({ op: 'edit', data }, base, f && links.length ? { linkAmounts: linkAmounts(f, links) } : {})];
 
   if (kind === 'flow') {
     openSheet({
       title: '修改資金異動', ok: '儲存修改', extra: [del],
       body: fSeg('dir', [['in', '投入'], ['out', '撤出']], x.flow < 0 ? 'in' : 'out') + fDate('date', '日期', dash(x.date)) +
         fNum('amt', '金額（台幣）', Math.abs(x.flow)) + fText('note', '備註', x.note) + linkHint(links),
-      submit: f => { const a = req(nval(f, 'amt'), '金額'); return edit({ date: slash(val(f, 'date')), flow: val(f, 'dir') === 'in' ? -a : a, note: val(f, 'note') }); }
+      submit: f => { const a = req(nval(f, 'amt'), '金額'); return edit({ date: slash(val(f, 'date')), flow: val(f, 'dir') === 'in' ? -a : a, note: val(f, 'note') }, f); }
     });
     return;
   }
@@ -494,7 +503,7 @@ function formLedger(arg) {
         if (trade && !val(f, 'stock')) throw new Error(tw ? '請填股號或股名' : '請填代號');
         return edit({ date: slash(val(f, 'date')), type: t, broker: tw ? '' : val(f, 'broker'), stock: val(f, 'stock'),
           price: trade ? req(nval(f, 'price'), '成交單價') : '', qty: trade ? req(nval(f, 'qty'), '股數') : '',
-          amount: trade ? '' : req(nval(f, 'amount'), '金額'), note: val(f, 'note') });
+          amount: trade ? '' : req(nval(f, 'amount'), '金額'), note: val(f, 'note') }, trade ? null : f);
       }
     });
     return;
@@ -514,7 +523,7 @@ function formLedger(arg) {
       `<p class="hint">${trade ? '顆數和 USDT 會跟著調整' : 'USDT 會跟著調整'}</p>` + linkHint(links),
     submit: f => edit(trade
       ? { date: slash(val(f, 'date')), side: val(f, 'side'), coin: val(f, 'coin'), where: val(f, 'where'), price: req(nval(f, 'price'), '單價'), qty: req(nval(f, 'qty'), '顆數'), note: val(f, 'note') }
-      : { date: slash(val(f, 'date')), usdt: (val(f, 'dir') === 'out' ? -1 : 1) * req(nval(f, 'usdt'), 'USDT 數量'), note: val(f, 'note') })
+      : { date: slash(val(f, 'date')), usdt: (val(f, 'dir') === 'out' ? -1 : 1) * req(nval(f, 'usdt'), 'USDT 數量'), note: val(f, 'note') }, trade ? null : f)
   });
 }
 

@@ -4,8 +4,8 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '2.9.0';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
-const LATEST_SCRIPT = 23;   // 最新 Code.gs 的 SCRIPT_VERSION
+const APP_VERSION = '3.0.0';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const LATEST_SCRIPT = 24;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
 
@@ -414,7 +414,8 @@ function parseCareer(rows) {
       cur = { year: y, title: title.replace(/^↑\s*/, ''), promoted: title.startsWith('↑'), tenure: num(x[2]), qTenure: num(x[3]), age: num(x[4]),
         salary: num(x[5]), yeTotal: num(x[6]), allowance: num(x[7]), yeBonus: num(x[8]), yeMonths: num(x[9]), yeTotalMonths: num(x[10]),
         bSalary: null, bonus: null, bonusMonths: null, raise: null, raisePct: null,
-        annual: num(x[19]), ot: num(x[20]), annualTotal: num(x[22]), months: num(x[28]), events: [] };
+        annual: num(x[19]), ot: num(x[20]), annualTotal: num(x[22]), months: num(x[28]),
+        fiscal: num(x[25]), fiscalTotal: num(x[27]), fiscalMonths: num(x[29]), events: [] };
       years.push(cur);
     } else if (!cur) return;
     else {
@@ -930,17 +931,37 @@ function holdingRows(list, money) {
 }
 
 // 持股頁共用：分組按鈕、報酬率圖、明細
-const groupLabel = x => (x.owner ? x.group + '・' + x.owner : x.group);
+const groupLabel = x => (x.merged ? mergedLabel(x) : x.owner ? x.group + '・' + x.owner : x.group);
+// 同一檔在不同帳戶（我的、定期定額、小孩）的部位合併成一列：股數、現值、成本加總，均價＝總成本÷總股數
+function mergeHoldings(items) {
+  const by = {}, order = [];
+  items.forEach(x => { const k = str(x.code).toUpperCase() || x.label; if (!by[k]) { by[k] = []; order.push(k); } by[k].push(x); });
+  return order.map(k => {
+    const ps = by[k];
+    if (ps.length === 1) return ps[0];
+    const own = ps.find(p => p.group === '我的' && !/ 定期$/.test(p.label)) || ps.find(p => p.group === '我的') || ps[0];
+    const sum = f => ps.reduce((t, p) => t + (p[f] || 0), 0);
+    const qtyAll = sum('qty'), value = sum('value'), cost = sum('cost');
+    return Object.assign({}, own, { label: own.group === '我的' && !/ 定期$/.test(own.label) ? own.label : (own.name || str(own.code)),
+      qty: qtyAll, value, cost, pl: value - cost, pct: cost ? (value - cost) / cost : null, avg: qtyAll ? cost / qtyAll : null, merged: ps });
+  });
+}
+function mergedLabel(x) {
+  const g = {};
+  x.merged.filter(p => p.qty > 0).forEach(p => { const n = p.owner || (/ 定期$/.test(p.label) ? '定期定額' : p.group); g[n] = (g[n] || 0) + (p.qty || 0); });
+  return Object.keys(g).map(n => (hidden ? n : `${n} ${dec(g[n], Number.isInteger(g[n]) ? 0 : 2)} 股`)).join('＋');
+}
 // priceForm：點持股可以打開的表單（台股：更新現價），回傳 [表單, 參數] 或 null
 function holdingsSection(id, all, filter, segId, money, priceFmt, priceForm) {
   const names = all.groups.map(g => g.name);
-  const list = all.items.filter(x => filter === 'all' || x.group === filter).sort((a, b) => b.pct - a.pct);
+  const shown = all.items.filter(x => filter === 'all' || x.group === filter);
+  const list = (filter === 'all' ? mergeHoldings(shown) : shown).sort((a, b) => b.pct - a.pct);
   return `<div class="card"><h3>個股報酬率</h3><p class="cap">點長條可看持股與損益</p>
     <div class="seg" id="${segId}"><button data-b="all" class="${filter === 'all' ? 'on' : ''}">全部</button>${names.map(b => `<button data-b="${esc(b)}" class="${filter === b ? 'on' : ''}">${esc(b)}</button>`).join('')}</div>
     ${chart(id, el => divergingChart(el, list.map(x => ({ label: x.label, pct: x.pct,
       html: tr('帳戶', esc(groupLabel(x))) + tr('股數', qty(x.qty)) + tr('均價／現價', hidden ? MASK : priceFmt(x.avg) + '／' + priceFmt(x.price)) + tr('現值', money(x.value)) + tr('損益', money === ntd ? signedNtd(x.pl) : signedUsd(x.pl)) }))))}</div>
   <div class="sec">持股明細</div><div class="list">${holdingRows(list.slice().sort((a, b) => b.value - a.value).map(x => ({
-    title: x.label, value: x.value, pct: x.pct, sub: `${esc(groupLabel(x))}・${qty(x.qty)} 股・均價 ${hidden ? MASK : priceFmt(x.avg)}${x.manual ? '・現價手動' : ''}`,
+    title: x.label, value: x.value, pct: x.pct, sub: `${esc(groupLabel(x))}${x.merged ? '' : '・' + qty(x.qty) + ' 股'}・均價 ${hidden ? MASK : priceFmt(x.avg)}${x.manual ? '・現價手動' : ''}`,
     form: priceForm && priceForm(x) ? priceForm(x)[0] : null, arg: priceForm && priceForm(x) ? priceForm(x)[1] : null })), money)}</div>`;
 }
 
@@ -962,6 +983,13 @@ function pageUs(d) {
     <div class="n"><span class="${cls(g.pct)}">${pct(g.pct)}</span>${g.irr != null ? '・IRR ' + pctPlain(g.irr) : ''}</div></div>`).join('')}</div>`;
   h += cashSection('us');
   h += holdingsSection('c-us', all, usBroker, 'brokerSeg', usd, v => (v == null ? '—' : '$' + dec(v, 2)));
+  // 持股比重：同一檔（例如我的 QQQ 和小孩的 QQQ）合併計算
+  const usShown = all.items.filter(x => usBroker === 'all' || x.group === usBroker), byCode = {};
+  usShown.forEach(x => { const k = str(x.code).toUpperCase(); byCode[k] = (byCode[k] || 0) + (x.value || 0); });
+  const uv = Object.values(byCode).reduce((s2, v) => s2 + v, 0);
+  if (uv) h += `<div class="card"><h3>持股比重</h3><p class="cap">依目前市值，同一檔股票合併計算</p>
+    ${chart('c-us-w', el => hbarChart(el, Object.keys(byCode).filter(k => byCode[k] > 0).sort((a, b) => byCode[b] - byCode[a]).map(k => ({ label: k, value: byCode[k], text: pctPlain(byCode[k] / uv),
+      html: tr('現值', usd(byCode[k])) + tr('比重', pctPlain(byCode[k] / uv)) }))))}</div>`;
   h += txList(u.tx.slice(-12).reverse().map(x => ({
     arg: 'us:' + x.row, date: x.date, title: `${x.buy ? '買進' : x.sell ? '賣出' : ''} ${x.name}`, sub: `${esc(x.where)}・${x.buy || x.sell ? qty(x.buy || x.sell) + ' 股' : ''} @ ${x.price != null ? '$' + dec(x.price, 2) : '—'}`,
     right: x.buy ? `<span>買</span>` : x.sell ? '<span class="up">賣</span>' : '' })));
@@ -1017,7 +1045,7 @@ function pageTw(d) {
   h += `<div class="card"><h3>持股比重</h3><p class="cap">依目前市值，同一檔股票合併計算</p>
     ${chart('c-tw-w', el => hbarChart(el, Object.keys(byName).sort((a, b) => byName[b] - byName[a]).map(n => ({ label: n, value: byName[n], text: pctPlain(byName[n] / tv),
       html: tr('現值', ntd(byName[n])) + tr('比重', pctPlain(byName[n] / tv)) }))))}</div>`;
-  h += txList(w.tx.slice(-12).reverse().map(x => ({
+  h += txList(w.tx.filter(x => x.buy || x.sell).slice(-12).reverse().map(x => ({
     arg: 'tw:' + x.row, date: x.date, title: x.buy || x.sell ? `${x.buy ? '買進' : '賣出'} ${x.name}` : x.flow ? (x.flow < 0 ? '入金' : '出金') : x.name,
     sub: x.buy || x.sell ? `${qty(x.buy || x.sell)} 股 @ ${x.price != null ? dec(x.price, 1) : '—'}` : [x.flow ? ntd(Math.abs(x.flow)) : '', esc(x.note)].filter(Boolean).join('・'),
     right: x.buy ? '<span>買</span>' : x.sell ? '<span class="up">賣</span>' : '' })));
@@ -1067,7 +1095,7 @@ function ledgerLine(kind, x) {
   if (kind === 'flow') return { t1: x.note || (x.flow < 0 ? '投入' : '撤出'), t2: x.date, r: `<span class="${x.flow > 0 ? 'down' : ''}">${x.flow < 0 ? '投入' : '撤出'} ${m(ntd(Math.abs(x.flow)))}</span>` };
   if (kind === 'crypto') {
     const trade = x.type === '買進' || x.type === '賣出';
-    return { t1: trade ? `${x.type} ${x.coin}` : x.type, t2: [esc(x.date), esc(x.where), trade ? `${qty(x.qty)} 顆 @ $${dec(x.price, 2)}` : '', esc(x.note)].filter(Boolean).join('・'),
+    return { t1: trade ? `${x.type} ${x.coin}` : `加密貨幣 ${x.type}`, t2: [esc(x.date), esc(x.where), trade ? `${qty(x.qty)} 顆 @ $${dec(x.price, 2)}` : '', esc(x.note)].filter(Boolean).join('・'),
       r: `${x.usdt > 0 ? '+' : x.usdt < 0 ? '−' : ''}${m(dec(Math.abs(x.usdt || 0), 2))} USDT` };
   }
   const money = kind === 'tw' ? v => ntd(v) : v => usd(v, 2);
@@ -1076,8 +1104,22 @@ function ledgerLine(kind, x) {
     return { t1: `${x.buy ? '買進' : '賣出'} ${name}`, t2: [esc(x.date), kind === 'us' ? esc(x.b) : '', `${qty(x.buy || x.sell)} 股 @ ${dec(x.price, 2)}`, esc(x.note)].filter(Boolean).join('・'),
       r: x.buy ? '<span>買</span>' : '<span class="up">賣</span>' };
   }
-  return { t1: `${kind === 'us' ? x.b + ' ' : ''}${x.flow < 0 ? '入金' : '出金'}`, t2: [x.date, x.note].filter(Boolean).map(esc).join('・'),
+  return { t1: `${kind === 'us' ? '美股 ' + x.b : '台股'} ${x.flow < 0 ? '入金' : '出金'}`, t2: [x.date, x.note].filter(Boolean).map(esc).join('・'),
     r: m(money(Math.abs(x.flow || 0))) };
+}
+// 明細清單：台股、美股、加密貨幣只列買賣；資金異動列 Total Overall 的資金異動，
+// 再加上沒有對應資金異動的出入金（例如台股轉到加密貨幣），同一組只列一次
+function ledgerList(L, kind) {
+  if (kind !== 'flow') return (L[kind] || []).filter(x => !isFlowEntry(kind, x)).slice().reverse().map(x => ({ k: kind, x }));
+  const items = (L.flow || []).map(x => ({ k: 'flow', x })), seen = {};
+  ['tw', 'us', 'crypto'].forEach(k => (L[k] || []).forEach(x => {
+    if (!isFlowEntry(k, x) || seen[k + ':' + x.row]) return;
+    const links = linkedOf(k, x);
+    if (links.some(l => l.k === 'flow')) return;   // 有對應的資金異動，點那一筆就能改
+    links.forEach(l => { seen[l.k + ':' + l.y.row] = true; });
+    items.push({ k, x });
+  }));
+  return items.map((it, i) => Object.assign(it, { i })).sort((a, b) => (a.x.date < b.x.date ? 1 : a.x.date > b.x.date ? -1 : b.i - a.i));
 }
 function pageLedger(d) {
   const L = d.ledger || {}, e = ed(), u = e && e.undo;
@@ -1086,10 +1128,10 @@ function pageLedger(d) {
   else h += `<div class="card"><h3>復原</h3><p class="cap">${u && u.count ? `上一步：${esc(u.desc)}（${esc(u.time)}）<br>最近 ${u.count} 次從 App 的修改都可以一步步復原` : '目前沒有可以復原的動作'}</p>
     ${u && u.count ? '<button class="btn soft" id="undoBtn" style="margin-top:10px">復原上一步</button>' : ''}</div>`;
   h += `<div class="seg" id="ledgerSeg">${LEDGER_KINDS.map(k => `<button data-k="${k[0]}" class="${k[0] === ledgerKind ? 'on' : ''}">${k[1]}</button>`).join('')}</div>`;
-  const list = (L[ledgerKind] || []).slice().reverse();
+  const list = ledgerList(L, ledgerKind);
   if (!list.length) return h + '<div class="empty">沒有資料</div>';
-  h += `<p class="hint" style="margin:0 4px 8px">${e ? '點一筆可以修改或刪除；' : ''}最新的在最上面，共 ${list.length} 筆</p>`;
-  return h + `<div class="list">${list.map(x => { const l = ledgerLine(ledgerKind, x); return `<div class="row${e ? ' link' : ''}"${e ? ` data-form="ledger" data-arg="${ledgerKind}:${x.row}"` : ''}>
+  h += `<p class="hint" style="margin:0 4px 8px">${e ? '點一筆可以修改或刪除；' : ''}最新的在最上面，共 ${list.length} 筆${ledgerKind === 'flow' ? '；各帳戶的入金、出金都在這裡' : '（只列買賣，入金出金在資金異動）'}</p>`;
+  return h + `<div class="list">${list.map(({ k, x }) => { const l = ledgerLine(k, x); return `<div class="row${e ? ' link' : ''}"${e ? ` data-form="ledger" data-arg="${k}:${x.row}"` : ''}>
     <div class="main"><div class="t1" style="font-size:15px">${esc(l.t1)}</div><div class="t2" style="white-space:normal">${l.t2}</div></div>
     <div class="r" style="font-size:14px;font-weight:600">${l.r}</div></div>`; }).join('')}</div>`;
 }
@@ -1254,11 +1296,15 @@ function pageCareer(d) {
     <div class="tile"><div class="k">年收入成長</div><div class="v ${cls(growth)}">${pct(growth)}</div><div class="n">${pf ? '比 ' + pf.year + ' 年' : ''}</div></div>
   </div>`;
 
-  h += `<div class="card"><h3>年收入</h3><p class="cap">單位：萬元，含加班；點長條看年前、年中分紅明細</p>
-    ${chart('c-income', el => columnChart(el, full.map(y => "'" + String(y.year).slice(2)), [{ name: '年收入', color: '--s1', values: full.map(y => inc(y) / 10000) }],
-      { axis: v => dec(v, 0), topLabel: v => dec(v, 0), maxBar: 26, tip: i => { const y = full[i];
-        if (y.est) return `<b>${y.year}・預估</b>${tr('年前分紅', ntd(y.yeTotal || 0))}${tr('年中分紅', ntd(y.bonus))}${tr('月薪', (hidden ? MASK : int(y.estFirst) + '×6＋' + int(y.estLast) + '×6'))}${y.ot ? tr('加班', ntd(y.ot)) : ''}${tr('合計', ntd(y.annualTotal))}`;
-        return `<b>${y.year}・${esc(y.title)}</b>${tr('年收入', ntd(y.annual))}${y.ot ? tr('加班', ntd(y.ot)) : ''}${y.annualTotal ? tr('合計', ntd(y.annualTotal)) : ''}${y.yeTotal ? tr('年前分紅', ntd(y.yeTotal)) : ''}${y.bonus ? tr('年中分紅', ntd(y.bonus)) : ''}${y.months ? tr('相當', dec(y.months, 1) + ' 個月') : ''}`; } }))}</div>`;
+  const fin = y => y.fiscalTotal || y.fiscal;
+  h += `<div class="card"><h3>年收入</h3><p class="cap">單位：萬元，含加班；點長條看明細</p>
+    <div class="legend"><span><i style="background:var(--s1)"></i>年收入：當年 1–2 月年前分紅＋當年年中分紅</span><span><i style="background:var(--s3)"></i>年度年收入：當年年中分紅＋隔年 1–2 月年前分紅</span></div>
+    ${chart('c-income', el => columnChart(el, full.map(y => "'" + String(y.year).slice(2)), [{ name: '年收入', color: '--s1', values: full.map(y => inc(y) / 10000) },
+      { name: '年度年收入', color: '--s3', values: full.map(y => (fin(y) ? fin(y) / 10000 : null)) }],
+      { axis: v => dec(v, 0), topLabel: v => dec(v, 0), maxBar: 18, tip: i => { const y = full[i];
+        const fy = fin(y) ? tr('年度年收入', ntd(fin(y)) + (y.fiscalMonths ? `（${dec(y.fiscalMonths, 1)} 個月）` : '')) : tr('年度年收入', '隔年年前分紅還沒發');
+        if (y.est) return `<b>${y.year}・預估</b>${tr('年前分紅', ntd(y.yeTotal || 0))}${tr('年中分紅', ntd(y.bonus))}${tr('月薪', (hidden ? MASK : int(y.estFirst) + '×6＋' + int(y.estLast) + '×6'))}${y.ot ? tr('加班', ntd(y.ot)) : ''}${tr('合計', ntd(y.annualTotal))}${fy}`;
+        return `<b>${y.year}・${esc(y.title)}</b>${tr('年收入', ntd(y.annual))}${y.ot ? tr('加班', ntd(y.ot)) : ''}${y.annualTotal ? tr('合計', ntd(y.annualTotal)) : ''}${y.yeTotal ? tr('年前分紅', ntd(y.yeTotal)) : ''}${y.bonus ? tr('年中分紅', ntd(y.bonus)) : ''}${y.months ? tr('相當', dec(y.months, 1) + ' 個月') : ''}${fy}`; } }))}</div>`;
 
   const sal = ys.filter(y => y.salary || y.bSalary);
   h += `<div class="card"><h3>月薪</h3><p class="cap">每年年初的月薪；點長條看當年調薪</p>
