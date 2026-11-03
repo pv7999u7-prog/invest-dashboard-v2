@@ -109,7 +109,8 @@ function formCost() {
   const e = ed();
   openSheet({
     title: '成本變更',
-    body: fSeg('dir', [['in', '投入'], ['out', '撤出']], 'in') + fDate('date', '日期') +
+    body: '<p class="hint" style="margin-top:0">定期定額的扣款請到「我的定期定額」或「小孩帳戶」頁按「＋ 本月定期定額」，會自動記到總成本，這裡不用再記。</p>' +
+      fSeg('dir', [['in', '投入'], ['out', '撤出']], 'in') + fDate('date', '日期') +
       fNum('total', '總金額（台幣）', '', '例如 400000') +
       `<div class="grp">分配到哪裡<em>全部填台幣，美股和加密貨幣依匯率換成美金寫入</em></div>` + fNum('tw', '台股', '', '0') +
       `<div class="row2">${fNum('cube', '美股 CUBE', '', '0')}${fNum('ft', '美股 Firstrade', '', '0')}</div>` +
