@@ -8,7 +8,7 @@
 const KEY = '請改成你自己的密碼';
 
 // 程式碼版本（App 設定頁會顯示，用來確認部署的是不是最新版；這行不用改）
-const SCRIPT_VERSION = 24;
+const SCRIPT_VERSION = 25;
 
 // 要讀的工作表與範圍（試算表版面有大改時，才需要調整這裡）
 const RANGES = {
@@ -400,6 +400,62 @@ const ACTIONS = {
         deleteLedgerRow(s2, g.r, L2.c1, L2.n, lastRowOf(s2, L2.col, L2.header));
       });
       return group.length ? `已刪除這筆${L.label}，和同一次出入金的另外 ${group.length} 筆` : '已刪除這筆' + L.label;
+    }
+    // 資金異動依各帳戶金額重新分配（一天一筆入金，當天加碼就改這一筆）：
+    // p.split = { dir: 'in'|'out', date, note, total（台幣）, tw（台幣）, CUBE、Firstrade（美金）, crypto（USDT） }
+    // 帳戶沒給＝不動（只同步日期、備註）；給 0＝刪掉那個帳戶的那筆；原本沒有、給了金額＝新增一筆
+    if (p.op === 'split') {
+      if (p.kind !== 'flow') throw new Error('只有資金異動可以重新分配');
+      const sp = p.split || {}, sign = sp.dir === 'out' ? -1 : 1;   // 1＝投入
+      const date = sp.date || old.date, note = sp.note != null ? String(sp.note) : old.note;
+      const total = need(sp.total, '總金額');
+      if (total <= 0) throw new Error('總金額要大於 0');
+      L.write(s, row, { date, flow: -sign * total, note });
+      const nd = toDate(date), touched = {}, dels = [];
+      const sync = g => {   // 只同步日期、備註
+        const L2 = LEDGERS[g.k], s2 = sh(L2.sheet);
+        if (dkey(nd) !== g.x.date) put(s2.getRange(g.r, L2.dateCol), nd);
+        if (note.trim() !== String(g.x.note).trim()) put(s2.getRange(g.r, L2.noteCol), note);
+      };
+      const accts = [['tw', g => g.k === 'tw'], ['CUBE', g => g.k === 'us' && g.x.b === 'CUBE'], ['Firstrade', g => g.k === 'us' && g.x.b === 'Firstrade'], ['crypto', g => g.k === 'crypto']];
+      accts.forEach(([a, is]) => {
+        const g = group.find(is);
+        if (g) touched[g.k + ':' + g.r] = true;
+        const v = sp[a];
+        if (v === undefined || v === null || v === '') { if (g) sync(g); return; }
+        const amt = num(v);
+        if (amt == null || amt < 0) throw new Error('金額不能是負的');
+        if (g && amt === 0) { dels.push(g); return; }
+        if (g) {
+          const L2 = LEDGERS[g.k], s2 = sh(L2.sheet);
+          L2.unapply(s2, g.x);
+          if (g.k === 'crypto') L2.write(s2, g.r, { date, usdt: sign * amt, note }, g.x);
+          else L2.write(s2, g.r, { date, type: sign > 0 ? 'in' : 'out', broker: g.x.b, amount: amt, note }, g.x);
+          return;
+        }
+        if (!amt) return;
+        // 原本沒有這個帳戶：照「成本變更」的方式新增一筆
+        if (a === 'tw') {
+          const tw = sh('台股');
+          appendRow(tw, lastRowOf(tw, 'A', '日期'), 1, 10, { 1: nd, 2: '', 3: -sign * amt, 4: '', 5: '', 6: '', 7: '', 8: '', 9: '', 10: note });
+          addTo(tw.getRange('C3'), sign * amt);
+        } else if (a === 'crypto') {
+          addTo(sh(CRYPTO).getRange(cryptoCash().row, 3), sign * amt);
+          cryptoLog(nd, sign > 0 ? '入金（台幣）' : '出金（台幣）', 'USDT', CRYPTO_CASH[1], '', '', sign * amt, note);
+        } else {
+          const us = sh('美股');
+          appendRow(us, lastRowOf(us, 'A', '日期'), 1, 10, { 1: nd, 2: a, 3: -sign * amt, 4: '', 5: '', 6: '', 7: '', 8: '', 9: '', 10: note });
+          addTo(us.getRange('C' + BROKERS[a]), sign * amt);
+        }
+      });
+      group.forEach(g => { if (!touched[g.k + ':' + g.r] && g.k !== 'flow') sync(g); });
+      // 改成 0 的帳戶最後刪；同一張表從下往上刪
+      dels.sort((a, b) => (a.k < b.k ? -1 : a.k > b.k ? 1 : b.r - a.r)).forEach(g => {
+        const L2 = LEDGERS[g.k], s2 = sh(L2.sheet);
+        L2.unapply(s2, g.x);
+        deleteLedgerRow(s2, g.r, L2.c1, L2.n, lastRowOf(s2, L2.col, L2.header));
+      });
+      return `已更新這筆資金異動（${sign > 0 ? '投入' : '撤出'} ${fmt(total)}）和各帳戶的金額`;
     }
     if (p.op !== 'edit') throw new Error('不認得的明細動作');
     const d = p.data || {};
@@ -993,7 +1049,7 @@ function dailyChanges() {
 const LEDGERS = {
   flow: {
     sheet: 'Total Overall', col: 'A', header: 'Date', c1: 1, n: 10, label: '資金異動', dateCol: 1, noteCol: 10,
-    parse: v => ({ date: dkey(v[0]), key: num(v[3]) || 0, flow: num(v[3]), note: String(v[9]) }),
+    parse: v => ({ date: dkey(v[0]), key: num(v[3]) || 0, flow: num(v[3]), fx: num(v[6]), note: String(v[9]) }),
     isFlow: x => !!x.flow,
     unapply() { return 0; },
     write(s, row, d) {

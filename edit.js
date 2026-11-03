@@ -472,20 +472,51 @@ function formLedger(arg) {
   const edit = (data, f) => ['ledger', Object.assign({ op: 'edit', data }, base, f && links.length ? { linkAmounts: linkAmounts(f, links) } : {})];
 
   if (kind === 'flow') {
+    // 資金異動：跟「成本變更」一樣分到各帳戶（都填台幣），改哪個帳戶就同步哪個；
+    // 原本沒有的帳戶填了金額會新增一筆，改成 0 會刪掉那筆；總額跟著各帳戶的加減自動變
+    const fx0 = x.fx || (ed() && ed().fx) || 0;
+    const acc = [['tw', '台股', l => l.k === 'tw'], ['CUBE', '美股 CUBE', l => l.k === 'us' && l.y.b === 'CUBE'],
+      ['Firstrade', '美股 Firstrade', l => l.k === 'us' && l.y.b === 'Firstrade'], ['crypto', '加密貨幣', l => l.k === 'crypto']];
+    const old = {};   // 各帳戶原本的金額：原幣（native）和換成台幣（ntd，預填用）
+    acc.forEach(([a, , is]) => {
+      const l = links.find(is), native = l ? linkOld(l) : 0;
+      old[a] = { native, ntd: a === 'tw' ? native : Math.round(native * fx0), has: !!l };
+    });
+    const sum0 = acc.reduce((t, [a]) => t + old[a].ntd, 0), rest0 = Math.abs(x.flow) - sum0;
+    let autoTotal = Math.abs(x.flow), lastSum = sum0;
     openSheet({
       title: '修改資金異動', ok: '儲存修改', extra: [del],
       body: fSeg('dir', [['in', '投入'], ['out', '撤出']], x.flow < 0 ? 'in' : 'out') + fDate('date', '日期', dash(x.date)) +
-        fNum('amt', '金額（台幣）', Math.abs(x.flow)) + fText('note', '備註', x.note) + linkHint(links) + hint('sumHint'),
-      // 改了總額，但其他帳戶的金額都沒動：提醒一起改（不自動改）
+        fNum('amt', '總金額（台幣）', Math.abs(x.flow), '', '會跟著下面各帳戶自動加減') +
+        `<div class="grp">分到哪裡<em>都填台幣；改哪個帳戶就同步哪個，填 0 會刪掉那筆</em></div>` + fNum('tw', '台股', old.tw.ntd || '', '0') +
+        `<div class="row2">${fNum('CUBE', '美股 CUBE', old.CUBE.ntd || '', '0')}${fNum('Firstrade', '美股 Firstrade', old.Firstrade.ntd || '', '0')}</div>` +
+        `<div class="row2">${fNum('crypto', '加密貨幣', old.crypto.ntd || '', '0')}${fNum('fx', '匯率', fx0 ? +fx0.toFixed(4) : '', '', '這筆當天的匯率')}</div>` +
+        hint('splitHint') + fText('note', '備註', x.note),
       after(f) {
-        if (!links.length) return;
-        const fx = (ed() && ed().fx) || 0, a = nval(f, 'amt') || 0;
-        const sum = links.reduce((t, l, i) => t + (nval(f, 'la' + i) || 0) * (l.k === 'us' || l.k === 'crypto' ? fx : 1), 0);
-        const totalChanged = Math.abs(a - Math.abs(x.flow)) > 0.5, linkChanged = links.some((l, i) => Math.abs((nval(f, 'la' + i) || 0) - linkOld(l)) > 0.004);
-        f.querySelector('#sumHint').innerHTML = `各帳戶合計約 NT$${fmtN(sum)}，總額 NT$${fmtN(a)}` + (Math.abs(sum - a) >= 1 ? `，差 NT$${fmtN(Math.abs(a - sum))}` : '') +
-          (totalChanged && !linkChanged ? '<br><b style="color:#f5c04a">總額改了，各帳戶金額也要記得改</b>' : '');
+        const sum = acc.reduce((t, [a]) => t + (nval(f, a) || 0), 0), amt = f.querySelector('[name="amt"]');
+        // 總額沒被手動改過：各帳戶加減多少，總額就跟著加減（保留原本「只記總成本」的部分）
+        if (sum !== lastSum && Number(amt.value) === autoTotal) { autoTotal = Math.max(0, Math.round(sum + rest0)); amt.value = autoTotal; }
+        lastSum = sum;
+        const t = nval(f, 'amt') || 0, rest = t - sum, fx = nval(f, 'fx') || 0;
+        const conv = acc.filter(([a]) => a !== 'tw' && nval(f, a)).map(([a, name]) => `${name} 約 ${fx ? fmtN(nval(f, a) / fx, 2) : '—'} ${a === 'crypto' ? 'USDT' : '美金'}`);
+        f.querySelector('#splitHint').innerHTML = (conv.length ? conv.join('・') + '<br>' : '') +
+          (Math.abs(rest) < 1 ? '已全部分配。' : rest > 0 ? `其餘 NT$${fmtN(rest)} 只記在總成本。` : `<b style="color:#f5c04a">各帳戶合計比總金額多 NT$${fmtN(-rest)}</b>`);
       },
-      submit: f => { const a = req(nval(f, 'amt'), '金額'); return edit({ date: slash(val(f, 'date')), flow: val(f, 'dir') === 'in' ? -a : a, note: val(f, 'note') }, f); }
+      submit(f) {
+        const total = req(nval(f, 'amt'), '總金額'), fx = nval(f, 'fx');
+        const sp = { dir: val(f, 'dir'), date: slash(val(f, 'date')), note: val(f, 'note'), total };
+        let sum = 0;
+        acc.forEach(([a]) => {
+          const v = nval(f, a) || 0;
+          sum += v;
+          if (v < 0) throw new Error('金額不能是負的');
+          if (Math.abs(v - old[a].ntd) < 0.5) return;   // 沒改的帳戶不送，原本的金額完全不動
+          if (a !== 'tw' && v && !(fx > 0)) throw new Error('請填匯率');
+          sp[a] = a === 'tw' ? v : Math.round(v / fx * 100) / 100;
+        });
+        if (sum > total + 0.5) throw new Error('各帳戶合計比總金額多');
+        return ['ledger', Object.assign({ op: 'split', split: sp }, base)];
+      }
     });
     return;
   }

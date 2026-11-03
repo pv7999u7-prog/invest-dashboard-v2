@@ -4,8 +4,8 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '3.0.1';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
-const LATEST_SCRIPT = 24;   // 最新 Code.gs 的 SCRIPT_VERSION
+const APP_VERSION = '3.1.0';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const LATEST_SCRIPT = 25;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
 
@@ -215,7 +215,7 @@ function parseLedger(raw) {
   const trade = (x, row) => ({ row, date: normDate(x[0]), b: str(x[1]), flow: num(x[2]), code: str(x[3]), price: num(x[4]), buy: num(x[5]), sell: num(x[6]),
     amt: num(x[7]) || num(x[8]), note: str(x[9]), key: num(x[2]) || num(x[5]) || num(x[6]) || 0 });
   return {
-    flow: ledgerRows(raw.total || [], 0, 'Date', (x, row) => (num(x[3]) ? { row, date: normDate(x[0]), flow: num(x[3]), note: str(x[9]), key: num(x[3]) } : null)),
+    flow: ledgerRows(raw.total || [], 0, 'Date', (x, row) => (num(x[3]) ? { row, date: normDate(x[0]), flow: num(x[3]), fx: num(x[6]), note: str(x[9]), key: num(x[3]) } : null)),
     tw: ledgerRows(raw.tw || [], 0, '日期', trade),
     us: ledgerRows(raw.us || [], 0, '日期', trade),
     crypto: ledgerRows(raw.crypto || [], 24, '日期', (x, row) => ({ row, date: normDate(x[24]), type: str(x[25]), coin: str(x[26]), where: str(x[27]),
