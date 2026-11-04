@@ -4,7 +4,7 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '3.2.0';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const APP_VERSION = '3.2.1';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
 const LATEST_SCRIPT = 26;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
@@ -929,8 +929,8 @@ function pageOverview(d) {
     <div class="tile"><div class="k">${t.target ? t.target.year + ' 年底目標' : '年度目標'}</div><div class="v">${t.target ? wan(t.target.value) : '—'}</div><div class="n">${t.target ? (t.value >= t.target.value ? '已達成' : '還差 ' + wan(t.target.value - t.value)) : ''}</div></div>
   </div>`;
 
-  h += irrCard(t);
   h += todayCard(d);
+  h += irrCard(t);
   h += `<div class="card"><h3>資產走勢</h3><p class="cap">總現值（藍）與累計投入成本（虛線）</p>
     <div class="seg" id="rangeSeg">${['6M', '1Y', 'ALL'].map(k => `<button data-r="${k}" class="${trendRange === k ? 'on' : ''}">${{ '6M': '6 個月', '1Y': '1 年', ALL: '全部' }[k]}</button>`).join('')}</div>
     ${chart('c-trend', el => trendChart(el, rangePts(t.series)))}</div>`;
