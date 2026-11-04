@@ -4,8 +4,8 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '3.1.3';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
-const LATEST_SCRIPT = 25;   // 最新 Code.gs 的 SCRIPT_VERSION
+const APP_VERSION = '3.2.0';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const LATEST_SCRIPT = 26;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
 
@@ -226,6 +226,65 @@ function parseLedger(raw) {
     crypto: ledgerRows(raw.crypto || [], 24, '日期', (x, row) => ({ row, date: normDate(x[24]), type: str(x[25]), coin: str(x[26]), where: str(x[27]),
       price: num(x[28]), qty: num(x[29]), usdt: num(x[30]), note: str(x[31]), key: num(x[30]) || 0 }))
   };
+}
+
+/* ---------- IRR（App 自己算，不用試算表的公式） ---------- */
+// XIRR：flows [{t: 毫秒, v: 金額}]，投入是負數、拿回（或現值）是正數；用二分法找年化報酬率
+function xirr(flows) {
+  const f = flows.filter(x => x.v && isFinite(x.t)).sort((a, b) => a.t - b.t);
+  if (f.length < 2 || !f.some(x => x.v > 0) || !f.some(x => x.v < 0)) return null;
+  const t0 = f[0].t, npv = r => f.reduce((s2, x) => s2 + x.v / Math.pow(1 + r, (x.t - t0) / 864e5 / 365), 0);
+  let lo = -0.9999, hi = 100, flo = npv(lo), fhi = npv(hi);
+  if (!(flo * fhi < 0)) return null;
+  for (let i = 0; i < 300; i++) {
+    const mid = (lo + hi) / 2, fm = npv(mid);
+    if (Math.abs(fm) < 1e-7 || hi - lo < 1e-10) return mid;
+    if (flo * fm < 0) { hi = mid; } else { lo = mid; flo = fm; }
+  }
+  return (lo + hi) / 2;
+}
+// 每一年：前一年 12/31 的總資產當成初始投入，加上當年的入金、出金，年底（今年用目前）總資產結算
+// 累計：從第一筆入金到現在；台股、美股各帳戶：該帳戶的出入金＋目前現值
+function computeIrr(d) {
+  const t = d.total;
+  if (!t) return;
+  const flowsOf = list => list.filter(x => x.flow).map(x => ({ t: toTime(x.date), v: x.flow }));
+  const now = Date.now(), dayMs = 864e5;
+  const toFlows = (d.ledger && d.ledger.flow) || t.history.filter(h => h.flow);
+  const flows = flowsOf(toFlows);
+  // 有總資產數字的時間點：歷史表的 B 欄、年底總結表
+  const pts = t.history.filter(h => h.value && h.date).map(h => ({ t: toTime(h.date), v: h.value }))
+    .concat((t.yearEnd || []).map(y => ({ t: toTime(y.date), v: y.value }))).sort((a, b) => a.t - b.t);
+  const near = (time, maxDays) => {   // 最接近這個時間（往前找）的總資產
+    const p = pts.filter(x => x.t <= time + dayMs / 2).pop();
+    return p && time - p.t <= maxDays * dayMs ? p : null;
+  };
+  const irr = { all: xirr(flows.concat([{ t: now, v: t.value }])), years: [] };
+  const y0 = flows.length ? new Date(flows[0].t).getFullYear() : new Date().getFullYear(), yNow = new Date().getFullYear();
+  for (let y = y0; y <= yNow; y++) {
+    const s = near(toTime(`${y - 1}/12/31`), 45);
+    const e = y === yNow ? { t: now, v: t.value } : near(toTime(`${y}/12/31`), 45);
+    if (!s || !e || e.t <= s.t) continue;
+    const fl = flows.filter(x => x.t > s.t && x.t <= e.t);
+    const r = xirr([{ t: s.t, v: -s.v }].concat(fl, [{ t: e.t, v: e.v }]));
+    if (r == null) continue;
+    const yrs = (e.t - s.t) / dayMs / 365;
+    irr.years.push({ year: y, start: s, end: e, net: -fl.reduce((a, x) => a + x.v, 0), irr: r, ret: Math.pow(1 + r, yrs) - 1,
+      exactStart: new Date(s.t).getMonth() === 11 && new Date(s.t).getDate() === 31, partial: y === yNow });
+  }
+  t.irrCalc = irr;
+  if (irr.all != null) t.irr = irr.all;
+  // 帳戶：台股（我的）、美股（全部、各券商）
+  const L = d.ledger || {};
+  if (d.tw && d.tw.total && L.tw) { const r = xirr(flowsOf(L.tw).concat([{ t: now, v: d.tw.total.value }])); if (r != null) d.tw.irr = r; }
+  if (d.us && L.us) {
+    const all = xirr(flowsOf(L.us).concat([{ t: now, v: d.us.total ? d.us.total.value : 0 }]));
+    if (all != null) d.us.irr = all;
+    (d.us.brokers || []).forEach(b => {
+      const r = xirr(flowsOf(L.us.filter(x => x.b === b.name)).concat([{ t: now, v: b.value }]));
+      if (r != null) d.us.brokerIrr[b.name] = r;
+    });
+  }
 }
 
 function parsePlans(rows) {
@@ -457,6 +516,7 @@ function parseAll(raw) {
     ledger: safe(parseLedger, raw)
   };
   derive(d);
+  safe(() => computeIrr(d));
   d.usAll = safe(() => combineUs(d));
   d.twAll = safe(() => combineTw(d));
   return d;
@@ -859,7 +919,7 @@ function pageOverview(d) {
     <div class="meta">約 ${usd(t.valueUSD)}・匯率 ${t.fx ? dec(t.fx, 2) : '—'}</div>
     <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
       <span class="pill ${cls(t.earn)}">累計 ${signedNtd(t.earn)}（${pct(earnPct)}）</span>
-      <span class="pill up" style="background:var(--tint-wash);color:var(--tint)">IRR ${pctPlain(t.irr)}</span>
+      <span class="pill up" style="background:var(--tint-wash);color:var(--tint)">累計 IRR ${pctPlain(t.irr)}</span>
     </div>
   </div>
   <div class="tiles t4">
@@ -869,6 +929,7 @@ function pageOverview(d) {
     <div class="tile"><div class="k">${t.target ? t.target.year + ' 年底目標' : '年度目標'}</div><div class="v">${t.target ? wan(t.target.value) : '—'}</div><div class="n">${t.target ? (t.value >= t.target.value ? '已達成' : '還差 ' + wan(t.target.value - t.value)) : ''}</div></div>
   </div>`;
 
+  h += irrCard(t);
   h += todayCard(d);
   h += `<div class="card"><h3>資產走勢</h3><p class="cap">總現值（藍）與累計投入成本（虛線）</p>
     <div class="seg" id="rangeSeg">${['6M', '1Y', 'ALL'].map(k => `<button data-r="${k}" class="${trendRange === k ? 'on' : ''}">${{ '6M': '6 個月', '1Y': '1 年', ALL: '全部' }[k]}</button>`).join('')}</div>
@@ -909,6 +970,21 @@ function todayChange(d) {
     ['台股', d.twAll ? sum(d.twAll.items, x => 'TW:' + str(x.code), 1) : null],
     ['加密貨幣', d.crypto ? sum(d.crypto.coins.filter(c => c.name !== 'USDT'), x => 'C:' + str(x.name).toUpperCase(), 1) : null]
   ];
+}
+// 報酬率（IRR）：每年以前一年 12/31 的總資產為初始金額，加上當年入金、出金，年底（今年用目前）結算
+function irrCard(t) {
+  const c = t.irrCalc;
+  if (!c || !c.years.length) return '';
+  const cur = c.years[c.years.length - 1], wanOf = v => (hidden ? MASK : dec(v / 10000, 1) + ' 萬');
+  const md = ms => { const x = new Date(ms); return `${x.getFullYear()}/${pad(x.getMonth() + 1)}/${pad(x.getDate())}`; };
+  return `<div class="card"><h3>報酬率（IRR）</h3><p class="cap">每年以前一年 12/31 的總資產當初始金額，加上當年的入金、出金計算；今年算到今天</p>
+    <div class="today" style="grid-template-columns:repeat(${cur.partial ? 3 : 2},minmax(0,1fr))">
+      ${cur.partial ? `<div><div class="k">${cur.year} 年 IRR</div><div class="v ${cls(cur.irr)}">${pct(cur.irr)}</div><div class="n">年化</div></div>
+      <div><div class="k">${cur.year} 年至今</div><div class="v ${cls(cur.ret)}">${pct(cur.ret)}</div><div class="n">實際報酬</div></div>` : ''}
+      <div><div class="k">累計 IRR</div><div class="v ${cls(c.all)}">${pct(c.all)}</div><div class="n">從第一筆入金</div></div>
+    </div>
+    <div style="margin-top:12px">${c.years.slice().reverse().map(y => `<div class="kv"><span>${y.year}${y.partial ? '（至今）' : ''}<br><small style="color:var(--text-muted)">${wanOf(y.start.v)}${y.exactStart ? '' : `（${md(y.start.t).slice(5)}）`} → ${wanOf(y.end.v)}・淨投入 ${wanOf(y.net)}</small></span>
+      <span class="${cls(y.irr)}">${pct(y.irr)}${y.partial ? '<br><small style="color:var(--text-muted)">至今 ' + pct(y.ret) + '</small>' : ''}</span></div>`).join('')}</div></div>`;
 }
 function todayCard(d) {
   const t = todayChange(d);

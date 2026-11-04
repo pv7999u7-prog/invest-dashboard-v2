@@ -8,7 +8,7 @@
 const KEY = '請改成你自己的密碼';
 
 // 程式碼版本（App 設定頁會顯示，用來確認部署的是不是最新版；這行不用改）
-const SCRIPT_VERSION = 25;
+const SCRIPT_VERSION = 26;
 
 // 要讀的工作表與範圍（試算表版面有大改時，才需要調整這裡）
 const RANGES = {
@@ -531,12 +531,14 @@ const ACTIONS = {
 /* ================================================================
    自動紀錄：每天晚上跑一次；週三記總資產、12/31 記年底結算
    ================================================================ */
+// 定時工作都用台灣時間：每天 22:00 看是不是週三（記總資產）；每天 06:00 看是不是 1/1（台股、美股 12/31 都收盤了，記年底）
 function ensureTrigger() {
   const props = PropertiesService.getScriptProperties();
-  if (props.getProperty('trigger-v1')) return;
-  ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'dailyJob').forEach(t => ScriptApp.deleteTrigger(t));
-  ScriptApp.newTrigger('dailyJob').timeBased().everyDays(1).atHour(22).create();
-  props.setProperty('trigger-v1', '1');
+  if (props.getProperty('trigger-v2')) return;
+  ScriptApp.getProjectTriggers().filter(t => ['dailyJob', 'yearEndJob'].indexOf(t.getHandlerFunction()) >= 0).forEach(t => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger('dailyJob').timeBased().everyDays(1).atHour(22).inTimezone('Asia/Taipei').create();
+  ScriptApp.newTrigger('yearEndJob').timeBased().everyDays(1).atHour(6).inTimezone('Asia/Taipei').create();
+  props.setProperty('trigger-v2', '1');
 }
 
 // 即時價每 10 分鐘自動更新一次（不開 App 時試算表也是新的）
@@ -553,7 +555,12 @@ function dailyJob() {
   const ss = SpreadsheetApp.getActiveSpreadsheet(), tz = ss.getSpreadsheetTimeZone();
   const d = new Date(), dow = Utilities.formatDate(d, tz, 'u'), md = Utilities.formatDate(d, tz, 'MM/dd');
   if (dow === '3') weeklyRecord();
-  if (md === '12/31') yearEndRecord();
+}
+
+// 1/1 早上：記前一年 12/31 的年底總資產（當年最後總資產，也是隔年的初始金額）
+function yearEndJob() {
+  const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone(), d = new Date();
+  if (Utilities.formatDate(d, tz, 'MM/dd') === '01/01') yearEndRecord(Number(Utilities.formatDate(d, tz, 'yyyy')) - 1);
 }
 
 // 每週三：在 Total Overall 的歷史表加一列，記下當天總資產（資金異動空白）
@@ -566,13 +573,21 @@ function weeklyRecord() {
 }
 
 // 12/31：Plan 填當年實際資產（萬）與實際投入（萬）；Total Overall 年底總結表填當天快照
-function yearEndRecord() {
-  const t = sh('Total Overall'), year = Number(Utilities.formatDate(new Date(), SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone(), 'yyyy'));
+function yearEndRecord(year) {
+  const t = sh('Total Overall'), tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
+  year = year || Number(Utilities.formatDate(new Date(), tz, 'yyyy'));
   const total = num(t.getRange('G2').getValue());
+  // 歷史表加一列 12/31 的年底紀錄（App 用它當隔年 IRR 的初始金額）；已經有那天的紀錄就不重複加
+  const dec31 = new Date(year, 11, 31), lastRow = lastRowOf(t, 'A', 'Date'), lastDate = t.getRange(lastRow, 1).getValue();
+  if (lastDate instanceof Date && dkey(lastDate) === dkey(dec31)) {
+    // 12/31 剛好是週三，晚上已經記過一筆（美股還沒收盤）：更新成收盤後的總資產
+    t.getRange(lastRow, 2).setValue(Math.round(total));
+    if (!String(t.getRange(lastRow, 10).getValue()).trim() || String(t.getRange(lastRow, 10).getValue()) === '每週自動紀錄') t.getRange(lastRow, 10).setValue('年底紀錄（當年最後總資產）');
+  } else appendTotalOverall(dec31, '', '年底紀錄（當年最後總資產）');
   // 當年投入＝歷史表裡當年的資金異動合計（負數是投入）
   const last = lastRowOf(t, 'A', 'Date'), head = findRow(t, 'A', 'Date');
   const rows = t.getRange(head + 1, 1, last - head, 4).getValues();
-  const input = -rows.filter(r => r[0] instanceof Date && r[0].getFullYear() === year).reduce((s, r) => s + (num(r[3]) || 0), 0);
+  const input = -rows.filter(r => r[0] instanceof Date && dkey(r[0]).slice(0, 4) === String(year)).reduce((s, r) => s + (num(r[3]) || 0), 0);
   const plan = planInfo().years.find(y => y.year === year);
   if (plan) {
     const s = sh('Plan');
