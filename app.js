@@ -4,7 +4,7 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '3.2.1';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const APP_VERSION = '3.2.2';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
 const LATEST_SCRIPT = 26;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
@@ -1033,7 +1033,16 @@ function mergedLabel(x) {
   return Object.keys(g).map(n => (hidden ? n : `${n} ${dec(g[n], Number.isInteger(g[n]) ? 0 : 2)} 股`)).join('＋');
 }
 // priceForm：點持股可以打開的表單（台股：更新現價），回傳 [表單, 參數] 或 null
-function holdingsSection(id, all, filter, segId, money, priceFmt, priceForm) {
+// between：放在「個股報酬率」和「持股明細」中間的內容（持股比重）
+function weightCard(id, items, money) {
+  const list = mergeHoldings(items).filter(x => x.value > 0).sort((a, b) => b.value - a.value);
+  const tv = list.reduce((s2, x) => s2 + x.value, 0);
+  if (!tv) return '';
+  return `<div class="card"><h3>持股比重</h3><p class="cap">依目前市值，同一檔股票合併計算</p>
+    ${chart(id, el => hbarChart(el, list.map(x => ({ label: x.label, value: x.value, text: pctPlain(x.value / tv),
+      html: tr('現值', money(x.value)) + tr('比重', pctPlain(x.value / tv)) }))))}</div>`;
+}
+function holdingsSection(id, all, filter, segId, money, priceFmt, priceForm, between = '') {
   const names = all.groups.map(g => g.name);
   const shown = all.items.filter(x => filter === 'all' || x.group === filter);
   const list = (filter === 'all' ? mergeHoldings(shown) : shown).sort((a, b) => b.pct - a.pct);
@@ -1041,7 +1050,7 @@ function holdingsSection(id, all, filter, segId, money, priceFmt, priceForm) {
     <div class="seg" id="${segId}"><button data-b="all" class="${filter === 'all' ? 'on' : ''}">全部</button>${names.map(b => `<button data-b="${esc(b)}" class="${filter === b ? 'on' : ''}">${esc(b)}</button>`).join('')}</div>
     ${chart(id, el => divergingChart(el, list.map(x => ({ label: x.label, pct: x.pct,
       html: tr('帳戶', esc(groupLabel(x))) + tr('股數', qty(x.qty)) + tr('均價／現價', hidden ? MASK : priceFmt(x.avg) + '／' + priceFmt(x.price)) + tr('現值', money(x.value)) + tr('損益', money === ntd ? signedNtd(x.pl) : signedUsd(x.pl)) }))))}</div>
-  <div class="sec">持股明細</div><div class="list">${holdingRows(list.slice().sort((a, b) => b.value - a.value).map(x => ({
+  ${between}<div class="sec">持股明細</div><div class="list">${holdingRows(list.slice().sort((a, b) => b.value - a.value).map(x => ({
     title: x.label, value: x.value, pct: x.pct, sub: `${esc(groupLabel(x))}${x.merged ? '' : '・' + qty(x.qty) + ' 股'}・均價 ${hidden ? MASK : priceFmt(x.avg)}${x.manual ? '・現價手動' : ''}`,
     form: priceForm && priceForm(x) ? priceForm(x)[0] : null, arg: priceForm && priceForm(x) ? priceForm(x)[1] : null })), money)}</div>`;
 }
@@ -1063,14 +1072,9 @@ function pageUs(d) {
   <div class="tiles">${all.groups.map(g => `<div class="tile"><div class="k">${esc(g.name)}</div><div class="v">${usd(g.value)}</div>
     <div class="n"><span class="${cls(g.pct)}">${pct(g.pct)}</span>${g.irr != null ? '・IRR ' + pctPlain(g.irr) : ''}</div></div>`).join('')}</div>`;
   h += cashSection('us');
-  h += holdingsSection('c-us', all, usBroker, 'brokerSeg', usd, v => (v == null ? '—' : '$' + dec(v, 2)));
-  // 持股比重：同一檔（例如我的 QQQ 和小孩的 QQQ）合併計算
-  const usShown = all.items.filter(x => usBroker === 'all' || x.group === usBroker), byCode = {};
-  usShown.forEach(x => { const k = str(x.code).toUpperCase(); byCode[k] = (byCode[k] || 0) + (x.value || 0); });
-  const uv = Object.values(byCode).reduce((s2, v) => s2 + v, 0);
-  if (uv) h += `<div class="card"><h3>持股比重</h3><p class="cap">依目前市值，同一檔股票合併計算</p>
-    ${chart('c-us-w', el => hbarChart(el, Object.keys(byCode).filter(k => byCode[k] > 0).sort((a, b) => byCode[b] - byCode[a]).map(k => ({ label: k, value: byCode[k], text: pctPlain(byCode[k] / uv),
-      html: tr('現值', usd(byCode[k])) + tr('比重', pctPlain(byCode[k] / uv)) }))))}</div>`;
+  // 持股比重放在個股報酬率和持股明細中間；同一檔（例如我的 QQQ 和小孩的 QQQ）合併計算
+  h += holdingsSection('c-us', all, usBroker, 'brokerSeg', usd, v => (v == null ? '—' : '$' + dec(v, 2)), null,
+    weightCard('c-us-w', all.items.filter(x => usBroker === 'all' || x.group === usBroker), usd));
   h += txList(u.tx.slice(-12).reverse().map(x => ({
     arg: 'us:' + x.row, date: x.date, title: `${x.buy ? '買進' : x.sell ? '賣出' : ''} ${x.name}`, sub: `${esc(x.where)}・${x.buy || x.sell ? qty(x.buy || x.sell) + ' 股' : ''} @ ${x.price != null ? '$' + dec(x.price, 2) : '—'}`,
     right: x.buy ? `<span>買</span>` : x.sell ? '<span class="up">賣</span>' : '' })));
@@ -1115,17 +1119,10 @@ function pageTw(d) {
   const prices = (ed() && ed().tw && ed().tw.prices) || [];
   const priceOf = x => (x.group === '我的' ? prices.find(q => q.code === str(x.code).toUpperCase()) : null);
   all.items.forEach(x => { const p = priceOf(x); x.manual = !!(p && p.manual); });
+  // 持股比重放在個股報酬率和持股明細中間；同一檔（例如我的 0050 和小孩的 0050）用代號合併計算
   h += holdingsSection('c-tw', all, twGroup, 'twSeg', ntd, v => (v == null ? '—' : dec(v, 1)),
-    x => (priceOf(x) ? ['twPrice', priceOf(x).code] : null));
+    x => (priceOf(x) ? ['twPrice', priceOf(x).code] : null), weightCard('c-tw-w', all.items.filter(x => twGroup === 'all' || x.group === twGroup), ntd));
   if (prices.length) h += '<p class="hint" style="margin:-4px 4px 12px">點自己的持股可以手動填現價（上櫃等抓不到價格的股票）</p>';
-  // 持股比重：同一檔股票（例如我的 0050 和小孩的 0050）合併計算
-  const shown = all.items.filter(x => twGroup === 'all' || x.group === twGroup);
-  const byName = {};
-  shown.forEach(x => { byName[x.name] = (byName[x.name] || 0) + (x.value || 0); });
-  const tv = Object.values(byName).reduce((s, v) => s + v, 0);
-  h += `<div class="card"><h3>持股比重</h3><p class="cap">依目前市值，同一檔股票合併計算</p>
-    ${chart('c-tw-w', el => hbarChart(el, Object.keys(byName).sort((a, b) => byName[b] - byName[a]).map(n => ({ label: n, value: byName[n], text: pctPlain(byName[n] / tv),
-      html: tr('現值', ntd(byName[n])) + tr('比重', pctPlain(byName[n] / tv)) }))))}</div>`;
   h += txList(w.tx.filter(x => x.buy || x.sell).slice(-12).reverse().map(x => ({
     arg: 'tw:' + x.row, date: x.date, title: x.buy || x.sell ? `${x.buy ? '買進' : '賣出'} ${x.name}` : x.flow ? (x.flow < 0 ? '入金' : '出金') : x.name,
     sub: x.buy || x.sell ? `${qty(x.buy || x.sell)} 股 @ ${x.price != null ? dec(x.price, 1) : '—'}` : [x.flow ? ntd(Math.abs(x.flow)) : '', esc(x.note)].filter(Boolean).join('・'),
