@@ -4,7 +4,7 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '3.2.3';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const APP_VERSION = '3.2.4';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
 const LATEST_SCRIPT = 26;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
@@ -1289,7 +1289,7 @@ function pageDca(d) {
     <div class="meta">投入約 ${ntd(tot.invNTD)}・${usd(tot.invUSD)}</div><div style="margin-top:10px"><span class="pill ${cls(tot.pct)}">${pct(tot.pct)}</span></div></div>`;
   const plans = m.plans.filter(p => p.monthly);
   h += `<div class="sec">扣款計畫</div><div class="list">${(plans.length ? plans : m.plans).map(p => `<div class="row">
-    <div class="main"><div class="t1">${esc(p.name)}</div><div class="t2">每月 ${p.monthly ? (p.currency === 'USD' ? usd(p.monthly) : ntd(p.monthly)) : '未扣款'}・${esc(p.start)} 起・${p.months || 0} 個月・${qty(p.shares)} 股</div></div>
+    <div class="main"><div class="t1">${esc(p.name)}</div><div class="t2" style="white-space:normal">每月 ${p.monthly ? (p.currency === 'USD' ? usd(p.monthly) : ntd(p.monthly)) : '未扣款'}・${esc(p.start)} 起・${p.months || 0} 個月・累計 ${qty(p.shares)} 股</div></div>
     <div class="r"><div class="t1">${p.value ? (p.currency === 'USD' ? usd(p.value, 0) : ntd(p.value)) : '—'}</div><div class="t2 ${cls(p.pct)}">${p.pct != null ? pct(p.pct) : ''}</div></div></div>`).join('')}</div>`;
   return h;
 }
