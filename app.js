@@ -4,7 +4,7 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '3.2.2';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const APP_VERSION = '3.2.3';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
 const LATEST_SCRIPT = 26;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
@@ -1252,6 +1252,9 @@ function pageKids(d) {
   const totalInv = (u && u.total ? u.total.costNTD || 0 : 0) + (w && w.total ? w.total.inv || 0 : 0);
   h += `<div class="card hero"><div class="lbl">兩人合計現值</div><div class="big">${ntd(totalVal)}</div>
     <div class="meta">投入 ${ntd(totalInv)}</div><div style="margin-top:10px"><span class="pill ${cls(totalVal - totalInv)}">${signedNtd(totalVal - totalInv)}（${pct(totalInv ? (totalVal - totalInv) / totalInv : null)}）</span></div></div>`;
+  // 台股每人的股數：定期定額累計＋單筆買進，依股票加總（例如 0050 1,113＋300＝1,413 股）
+  const twShares = {};
+  if (w) w.plans.concat(w.lumps).forEach(p => { if (p.name) twShares[p.name] = (twShares[p.name] || 0) + (p.shares || 0); });
   names.forEach(n => {
     const a = u ? u.kids.find(k => k.name === n) : null, b = w ? w.kids.find(k => k.name === n) : null;
     const hold = u && u.holdings[n] ? u.holdings[n] : [];
@@ -1259,13 +1262,14 @@ function pageKids(d) {
       ${a ? `<div class="kv"><span>美股現值</span><span>${ntd(a.valNTD)}</span></div>
       <div class="kv"><span>美股報酬（台幣計）</span><span class="${cls(a.pctNTD)}">${pct(a.pctNTD)}</span></div>
       ${hold.map(x => `<div class="kv"><span>${esc(x.code)}</span><span>${qty(x.qty)} 股・均價 ${hidden ? MASK : '$' + dec(x.avg, 2)}</span></div>`).join('')}` : ''}
-      ${b ? `<div class="kv"><span>台股現值</span><span>${ntd(b.value)}</span></div>
+      ${b ? `${Object.keys(twShares).filter(k => twShares[k] > 0).map(k => `<div class="kv"><span>${esc(k)} 目前股數</span><span>${qty(twShares[k])} 股</span></div>`).join('')}
+      <div class="kv"><span>台股現值</span><span>${ntd(b.value)}</span></div>
       <div class="kv"><span>台股報酬</span><span class="${cls(b.pct)}">${pct(b.pct)}</span></div>` : ''}</div>`;
   });
   h += cashSection('more/kids', '美股帳戶閒置現金');
   if (w && w.plans.length) {
     h += `<div class="sec">台股定期定額（每人）</div><div class="list">${w.plans.map(p => `<div class="row">
-      <div class="main"><div class="t1">${esc(p.name)}</div><div class="t2">每月 ${ntd(p.monthly)}・${esc(p.start)} 起・${p.months || 0} 個月</div></div>
+      <div class="main"><div class="t1">${esc(p.name)}</div><div class="t2" style="white-space:normal">每月 ${ntd(p.monthly)}・${esc(p.start)} 起・${p.months || 0} 個月・累計 ${qty(p.shares)} 股</div></div>
       <div class="r"><div class="t1">${ntd(p.value)}</div><div class="t2 ${cls(p.pct)}">${pct(p.pct)}</div></div></div>`).join('')}</div>`;
   }
   if (w && w.lumps.length) {
