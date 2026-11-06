@@ -4,7 +4,7 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '3.2.4';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const APP_VERSION = '3.2.5';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
 const LATEST_SCRIPT = 26;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
@@ -876,10 +876,10 @@ function donutChart(host, slices, total) {
 }
 
 // 橫條：rows {label, value, color, html, text}
-function hbarChart(host, rows) {
+function hbarChart(host, rows, right = 64) {
   host.innerHTML = '';
   const W = host.clientWidth, rowH = 30;
-  const m = { t: 2, r: 64, b: 2, l: 76 };
+  const m = { t: 2, r: right, b: 2, l: 76 };
   const H = m.t + m.b + rows.length * rowH;
   const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, height: H }, host);
   const max = Math.max(1, ...rows.map(r => r.value));
@@ -1034,13 +1034,15 @@ function mergedLabel(x) {
 }
 // priceForm：點持股可以打開的表單（台股：更新現價），回傳 [表單, 參數] 或 null
 // between：放在「個股報酬率」和「持股明細」中間的內容（持股比重）
-function weightCard(id, items, money) {
+// assets：總資產（台幣）；rate：這頁幣別換台幣的匯率（台股 1、美股用美金匯率）
+function weightCard(id, items, money, assets, rate = 1) {
   const list = mergeHoldings(items).filter(x => x.value > 0).sort((a, b) => b.value - a.value);
   const tv = list.reduce((s2, x) => s2 + x.value, 0);
   if (!tv) return '';
-  return `<div class="card"><h3>持股比重</h3><p class="cap">依目前市值，同一檔股票合併計算</p>
-    ${chart(id, el => hbarChart(el, list.map(x => ({ label: x.label, value: x.value, text: pctPlain(x.value / tv),
-      html: tr('現值', money(x.value)) + tr('比重', pctPlain(x.value / tv)) }))))}</div>`;
+  const ofAll = assets && rate ? x => x.value * rate / assets : null;
+  return `<div class="card"><h3>持股比重</h3><p class="cap">依目前市值，同一檔股票合併計算${ofAll ? '；長條右邊：佔這頁持股／佔總資產' : ''}</p>
+    ${chart(id, el => hbarChart(el, list.map(x => ({ label: x.label, value: x.value, text: pctPlain(x.value / tv) + (ofAll ? '／' + pctPlain(ofAll(x)) : ''),
+      html: tr('現值', money(x.value)) + tr('佔這頁持股', pctPlain(x.value / tv)) + (ofAll ? tr('佔總資產', pctPlain(ofAll(x))) : '') })), ofAll ? 92 : 64))}</div>`;
 }
 function holdingsSection(id, all, filter, segId, money, priceFmt, priceForm, between = '') {
   const names = all.groups.map(g => g.name);
@@ -1074,7 +1076,7 @@ function pageUs(d) {
   h += cashSection('us');
   // 持股比重放在個股報酬率和持股明細中間；同一檔（例如我的 QQQ 和小孩的 QQQ）合併計算
   h += holdingsSection('c-us', all, usBroker, 'brokerSeg', usd, v => (v == null ? '—' : '$' + dec(v, 2)), null,
-    weightCard('c-us-w', all.items.filter(x => usBroker === 'all' || x.group === usBroker), usd));
+    weightCard('c-us-w', all.items.filter(x => usBroker === 'all' || x.group === usBroker), usd, d.total && d.total.value, fx));
   h += txList(u.tx.slice(-12).reverse().map(x => ({
     arg: 'us:' + x.row, date: x.date, title: `${x.buy ? '買進' : x.sell ? '賣出' : ''} ${x.name}`, sub: `${esc(x.where)}・${x.buy || x.sell ? qty(x.buy || x.sell) + ' 股' : ''} @ ${x.price != null ? '$' + dec(x.price, 2) : '—'}`,
     right: x.buy ? `<span>買</span>` : x.sell ? '<span class="up">賣</span>' : '' })));
@@ -1121,7 +1123,7 @@ function pageTw(d) {
   all.items.forEach(x => { const p = priceOf(x); x.manual = !!(p && p.manual); });
   // 持股比重放在個股報酬率和持股明細中間；同一檔（例如我的 0050 和小孩的 0050）用代號合併計算
   h += holdingsSection('c-tw', all, twGroup, 'twSeg', ntd, v => (v == null ? '—' : dec(v, 1)),
-    x => (priceOf(x) ? ['twPrice', priceOf(x).code] : null), weightCard('c-tw-w', all.items.filter(x => twGroup === 'all' || x.group === twGroup), ntd));
+    x => (priceOf(x) ? ['twPrice', priceOf(x).code] : null), weightCard('c-tw-w', all.items.filter(x => twGroup === 'all' || x.group === twGroup), ntd, d.total && d.total.value));
   if (prices.length) h += '<p class="hint" style="margin:-4px 4px 12px">點自己的持股可以手動填現價（上櫃等抓不到價格的股票）</p>';
   h += txList(w.tx.filter(x => x.buy || x.sell).slice(-12).reverse().map(x => ({
     arg: 'tw:' + x.row, date: x.date, title: x.buy || x.sell ? `${x.buy ? '買進' : '賣出'} ${x.name}` : x.flow ? (x.flow < 0 ? '入金' : '出金') : x.name,
@@ -1146,7 +1148,8 @@ function pageCrypto(d) {
   </div>
   <div class="card"><h3>幣別比重</h3><p class="cap">依目前市值</p>
     <div class="stack">${gl.map(g => `<div style="width:${g.value / c.total * 100}%;background:var(${colors[g.name] || '--s1'})"></div>`).join('')}</div>
-    <div class="legend" style="margin:8px 0 0">${gl.map(g => `<span><i style="background:var(${colors[g.name] || '--s1'})"></i>${esc(g.name)} ${pctPlain(g.value / c.total)}</span>`).join('')}</div>
+    <div class="legend" style="margin:8px 0 0">${gl.map(g => `<span><i style="background:var(${colors[g.name] || '--s1'})"></i>${esc(g.name)} ${pctPlain(g.value / c.total)}${d.total && d.total.value ? '（總 ' + pctPlain(g.value / d.total.value) + '）' : ''}</span>`).join('')}</div>
+    ${d.total && d.total.value ? '<p class="cap" style="margin:6px 0 0">括號內是佔總資產的比重</p>' : ''}
   </div>
   <div class="sec">持有</div><div class="list">${gl.map(g => `<div class="row">
     <span class="badge" style="background:var(${colors[g.name] || '--s1'})">${esc(g.name.slice(0, 1))}</span>
