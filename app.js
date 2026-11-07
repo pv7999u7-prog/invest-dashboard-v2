@@ -4,7 +4,7 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '3.2.5';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const APP_VERSION = '3.2.6';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
 const LATEST_SCRIPT = 26;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
@@ -827,8 +827,10 @@ function columnChart(host, labels, series, opts = {}) {
     });
     if (labels.length <= 14 && (i % (opts.labelEvery || 1) === 0)) svgText(svg, cx, H - 6, lab, { 'text-anchor': 'middle' });
     if (opts.topLabel && !hidden) {
-      const v = series[0].values[i];
-      if (v) svgText(svg, cx - (n > 1 ? groupW / 2 - bw / 2 : 0), Y(v) - 5, opts.topLabel(v), { 'text-anchor': 'middle', fill: css('--text-secondary') });
+      (opts.labelSeries || [0]).forEach(j => {   // 要標數字的系列（預設只有第一個）
+        const v = series[j].values[i];
+        if (v > 0) svgText(svg, cx - groupW / 2 + j * (bw + gap) + bw / 2, Y(v) - 5, opts.topLabel(v), { 'text-anchor': 'middle', fill: css('--text-secondary') });
+      });
     }
     const top = Math.min(Y(0) - 24, Y(Math.max(0, ...series.map(s => s.values[i] || 0))) - 2);
     const hit = svgEl('rect', { class: 'hit', x: cx - groupW / 2 - 6, y: top, width: groupW + 12, height: Y(0) - top, fill: 'transparent' }, svg);
@@ -1304,20 +1306,28 @@ function pagePlan(d) {
   const year = new Date().getFullYear();
   const ys = p.years.filter(y => y.year <= year + 5);
   const last = p.years[p.years.length - 1];
+  // 每年實際出入金淨額（萬）：明細的入金是負數，所以加總後反過來；正數＝淨投入、負數＝淨出金
+  const flowRows = (d.ledger && d.ledger.flow) || (d.total ? d.total.history.filter(x => x.flow) : []);
+  const netIn = {};
+  flowRows.forEach(x => { const t = toTime(x.date); if (x.flow && isFinite(t)) { const yy = new Date(t).getFullYear(); netIn[yy] = (netIn[yy] || 0) - x.flow / 10000; } });
+  const flowOf = y => y.year in netIn ? netIn[y.year] : (y.actualInput != null ? y.actualInput : null);
+  const signWan = v => (v > 0 ? '+' : v < 0 ? '−' : '') + dec(Math.abs(v), 1) + ' 萬';
   let h = `${head('長期計畫', [['編輯', 'plan']])}
   <div class="tiles">
     <div class="tile"><div class="k">假設年報酬</div><div class="v">${pctPlain(p.irr, 0)}</div><div class="n">每年投入 ${p.input || 100} 萬</div></div>
     <div class="tile"><div class="k">${last ? last.year + '（' + last.age + ' 歲）' : '最終'}目標</div><div class="v">${last ? (hidden ? MASK : dec(last.target / 10000, 2) + ' 億') : '—'}</div><div class="n">計畫終點</div></div>
   </div>
-  <div class="card"><h3>目標 vs 實際</h3><p class="cap">單位：萬元；今年的「實際」是目前現值</p>
-    <div class="legend"><span><i style="background:var(--s1)"></i>實際</span><span><i style="background:var(--axis)"></i>計畫目標</span></div>
+  <div class="card"><h3>目標 vs 實際</h3><p class="cap">單位：萬元；今年的「實際」是目前現值；出入金是當年入金減出金（淨出金時不畫柱子）</p>
+    <div class="legend"><span><i style="background:var(--s1)"></i>實際</span><span><i style="background:var(--axis)"></i>計畫目標</span><span><i style="background:var(--s3)"></i>實際出入金</span></div>
     ${chart('c-plan', el => columnChart(el, ys.map(y => String(y.year)),
-      [{ name: '實際', color: '--s1', values: ys.map(y => y.actual || (y.year === year ? now : null)) }, { name: '目標', color: '--axis', values: ys.map(y => y.target) }],
-      { axis: v => dec(v, 0), topLabel: v => dec(v, 0), tip: i => { const y = ys[i]; const a = y.actual || (y.year === year ? now : null);
-        return `<b>${y.year}（${y.age} 歲）</b>${tr('計畫目標', hidden ? MASK : dec(y.target, 0) + ' 萬')}${a ? tr(y.actual ? '實際' : '目前', hidden ? MASK : dec(a, 0) + ' 萬') + tr('達成率', pctPlain(a / y.target, 0)) : ''}`; } }))}</div>
+      [{ name: '實際', color: '--s1', values: ys.map(y => y.actual || (y.year === year ? now : null)) }, { name: '目標', color: '--axis', values: ys.map(y => y.target) },
+       { name: '出入金', color: '--s3', values: ys.map(flowOf) }],
+      { axis: v => dec(v, 0), topLabel: v => dec(v, 0), labelSeries: [0, 2], tip: i => { const y = ys[i]; const a = y.actual || (y.year === year ? now : null); const f = flowOf(y);
+        return `<b>${y.year}（${y.age} 歲）</b>${tr('計畫目標', hidden ? MASK : dec(y.target, 0) + ' 萬')}${a ? tr(y.actual ? '實際' : '目前', hidden ? MASK : dec(a, 0) + ' 萬') + tr('達成率', pctPlain(a / y.target, 0)) : ''}` +
+          (f != null ? tr('實際出入金' + (y.year === year ? '（至今）' : ''), hidden ? MASK : signWan(f)) : '') + (y.input ? tr('計畫投入', hidden ? MASK : dec(y.input, 0) + ' 萬') : ''); } }))}</div>
   <div class="sec">逐年目標</div><div class="list">${p.years.map(y => `<div class="row">
     <div class="main"><div class="t1" style="font-size:15px">${y.year}</div><div class="t2">${y.age} 歲</div></div>
-    <div class="r"><div class="t1" style="font-size:15px">${hidden ? MASK : int(y.target) + ' 萬'}</div><div class="t2" style="color:var(--text-secondary)">${y.actual ? '實際 ' + (hidden ? MASK : int(y.actual) + ' 萬') : ''}</div></div></div>`).join('')}</div>`;
+    <div class="r"><div class="t1" style="font-size:15px">${hidden ? MASK : int(y.target) + ' 萬'}</div><div class="t2" style="color:var(--text-secondary)">${[y.actual ? '實際 ' + (hidden ? MASK : int(y.actual) + ' 萬') : '', flowOf(y) != null ? '出入金 ' + (hidden ? MASK : signWan(flowOf(y))) : ''].filter(Boolean).join(' · ')}</div></div></div>`).join('')}</div>`;
   return h;
 }
 
