@@ -4,8 +4,8 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '3.3.1';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
-const LATEST_SCRIPT = 28;   // 最新 Code.gs 的 SCRIPT_VERSION
+const APP_VERSION = '3.3.2';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const LATEST_SCRIPT = 29;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
 
@@ -1593,7 +1593,7 @@ function timingLine() {
   const sec = v => dec(v / 1000, 1) + ' 秒';
   return ['更新', '寫入', '更新股價'].filter(k => state.timing[k]).map(k => {
     const t = state.timing[k], m = t.ms;
-    const parts = m ? [['抓即時價', m.live], ['寫入', m.write], ['讀分頁', m.ranges], ['讀表單資料', m.edit], ['讀漲跌', m.daily]]
+    const parts = m ? [['抓即時價', m.live], ['寫入', m.write], ['讀分頁', m.ranges], ['讀表單資料', m.edit], ['讀漲跌', m.daily], ['記錄', m.log]]
       .filter(x => x[1] >= 50).map(x => x[0] + ' ' + sec(x[1])) : [];
     if (m) parts.push('網路與啟動 ' + sec(Math.max(0, t.total - m.total)));
     return `<p class="msg" style="margin:4px 0 0;text-align:center;color:var(--text-muted)">上次${k} ${sec(t.total)}${parts.length ? '（' + parts.join('、') + '）' : ''}</p>`;

@@ -8,7 +8,7 @@
 const KEY = '請改成你自己的密碼';
 
 // 程式碼版本（App 設定頁會顯示，用來確認部署的是不是最新版；這行不用改）
-const SCRIPT_VERSION = 28;
+const SCRIPT_VERSION = 29;
 
 // 要讀的工作表與範圍（試算表版面有大改時，才需要調整這裡）
 const RANGES = {
@@ -58,11 +58,15 @@ function doPost(e) {
       if (body.action !== 'undo') REC = { desc: '', ops: [] };
       const msg = fn(body.payload || {});
       SpreadsheetApp.flush();
-      if (REC) { REC.desc = msg || body.action; recSave(); }
-      log(body.action, body.payload);
       mark('write');
       const data = readAll();
-      return json({ ok: true, message: msg || '已寫入試算表', updated: now(), data, ms: msOut() });
+      // 復原紀錄和 App 紀錄等讀完才寫：每次「寫了再讀」試算表都要整份重算一次（好幾秒），所以寫的動作集中放最後
+      const desc = msg || body.action, saved = !!(REC && REC.ops.length), at = now();
+      if (REC) { REC.desc = desc; recSave(); }
+      log(body.action, body.payload);
+      if (saved && data._edit && data._edit.undo) data._edit.undo = { count: Math.min((data._edit.undo.count || 0) + 1, UNDO_KEEP), time: at, desc };
+      mark('log');
+      return json({ ok: true, message: msg || '已寫入試算表', updated: at, data, ms: msOut() });
     } catch (err) {
       // 寫到一半失敗：照記下的資料倒回去，不留半套
       let rolled = false;
@@ -70,7 +74,7 @@ function doPost(e) {
         try { SpreadsheetApp.flush(); } catch (e) {}
         try { applyUndo(REC.ops); SpreadsheetApp.flush(); rolled = true; } catch (e) {}
       }
-      REC = null;
+      REC = null; RC = null;
       return json({ ok: false, error: String(err.message || err) + (rolled ? '（已自動還原，試算表沒有被改動）' : '') });
     } finally {
       lock.releaseLock();
@@ -85,7 +89,7 @@ let MS = { t0: 0 };
 function mark(name) { const t = Date.now(); MS[name] = t - (MS.last || MS.t0); MS.last = t; }
 function msOut() {
   const o = { total: Date.now() - MS.t0 };
-  ['live', 'write', 'ranges', 'edit', 'daily'].forEach(k => { if (MS[k] != null) o[k] = MS[k]; });
+  ['live', 'write', 'ranges', 'edit', 'daily', 'log'].forEach(k => { if (MS[k] != null) o[k] = MS[k]; });
   return o;
 }
 
@@ -649,6 +653,7 @@ function appendTotalOverall(date, flow, note) {
 // values 的值可以是函式 row => 值（例如要寫 =-E153*F153 這種跟列號有關的公式）。
 function appendRow(s, last, c1, n, values) {
   s.insertRowBefore(last);
+  unsnap(s);
   const row = last + 1;
   // 第一步：把原本的最後一列搬到插入的空白列（失敗就刪掉那列空白列，原本的資料沒動）
   try {
@@ -933,7 +938,7 @@ function houseRows() {
 /* ================================================================
    即時價：台股用證交所公開報價、美股用 Finnhub（要金鑰）、加密貨幣用 Kraken
    抓到的價格寫在隱藏分頁「App 即時價」（代號、現價、昨收、抓取時間）。
-   Price 分頁的價格公式會包一層：一小時內抓過的即時價優先，抓不到或太舊就用原本的公式（GOOGLEFINANCE 等）。
+   Price 分頁的價格公式會包一層：有即時價就用即時價，沒有就用原本的公式（GOOGLEFINANCE 等）；超過一小時沒抓到的即時價會被清掉。
    每 10 分鐘自動更新；App 先讀到資料後，價格超過 2 分鐘沒更新會再另外要求抓一次（不擋住讀取和寫入）。
    Finnhub 金鑰放在 Apps Script「專案設定 → 指令碼屬性」的 FINNHUB_KEY，不寫在程式碼裡。
    ================================================================ */
@@ -942,8 +947,8 @@ const LIVE_SHEET = 'App 即時價';
 // 價格公式外面包一層即時價：keyExpr 是算出代號的公式片段，orig 是原本的公式（不含 =）
 function liveWrap(keyExpr, orig) {
   const ref = `'${LIVE_SHEET}'!$A:$D`;
-  return `=LET(k,${keyExpr},v,IFERROR(VLOOKUP(k,${ref},2,FALSE),""),t,IFERROR(VLOOKUP(k,${ref},4,FALSE),0),` +
-    `IF(AND(ISNUMBER(v),v>0,NOW()-t<1/24),v,${orig}))`;
+  // 不在公式裡用 NOW() 判斷新舊：NOW() 會讓整份試算表每次有任何變動都重算。太舊的即時價改由 refreshLive 清掉
+  return `=LET(k,${keyExpr},v,IFERROR(VLOOKUP(k,${ref},2,FALSE),""),IF(AND(ISNUMBER(v),v>0),v,${orig}))`;
 }
 
 function liveSheet() {
@@ -987,6 +992,8 @@ function refreshLive(force, maxAge) {
     const i = keys.indexOf(x.key), row = [x.key, x.price, x.prev || '', now];
     if (i >= 0) vals[i] = row; else { keys.push(x.key); vals.push(row); }
   });
+  // 這次沒抓到、而且超過一小時沒更新的：把現價清掉，Price 的公式就會退回原本的 GOOGLEFINANCE
+  vals.forEach(r => { if (r[3] !== now && !(r[3] instanceof Date && now.getTime() - r[3].getTime() < 3600 * 1000)) r[1] = ''; });
   if (vals.length) s.getRange(2, 1, vals.length, 4).setValues(vals);
   wrapPriceFormulas();
 }
@@ -1045,7 +1052,14 @@ function wrapPriceFormulas() {
     const codes = p.getRange(`${col}2:${col}200`).getValues(), f = p.getRange(2, pc, 199, 1).getFormulas();
     codes.forEach((r, i) => {
       const row = i + 2, old = f[i][0];
-      if (!String(r[0]).trim() || !old || old.indexOf(LIVE_SHEET) >= 0) return;
+      if (!String(r[0]).trim() || !old) return;
+      if (old.indexOf(LIVE_SHEET) >= 0) {
+        // 舊版包的公式裡有 NOW()：改成沒有 NOW() 的寫法（只做一次）
+        if (!/NOW\(\)/i.test(old)) return;
+        const fixed = old.replace(/,\s*t\s*,\s*IFERROR\(VLOOKUP\(k,[^()]*,4,FALSE\),0\)/i, '').replace(/,\s*NOW\(\)\s*-\s*t\s*<\s*1\/24/i, '');
+        if (fixed !== old && !/NOW\(\)/i.test(fixed) && !/[(,]t[,)]/.test(fixed.slice(0, fixed.indexOf('IF(AND(')))) p.getRange(row, pc).setFormula(fixed);
+        return;
+      }
       p.getRange(row, pc).setFormula(liveWrap(`"${prefix}"&${keyOf(row)}`, old.replace(/^=/, '')));
     });
   });
@@ -1313,20 +1327,39 @@ const UNDO_SHEET = 'App 復原';
 const UNDO_KEEP = 30;   // 最多保留幾步
 let REC = null;         // 這次動作的紀錄 {desc, ops}；null 表示不記（例如自動紀錄、復原本身）
 
+// 復原要記下每一格寫入前的內容。一格一格去讀的話，每次都是「寫了再讀」，試算表要整份重算一次（好幾秒）；
+// 所以每個分頁在這次動作第一次要記的時候整張讀一次（SNAP），之後都從記憶體拿。
+// 同一格在這次動作裡寫了兩次，第二次記到的仍是動作前的內容，倒回去的結果一樣是動作前的樣子。
+// 插入或刪除列之後列號會變，所以 recRow 會丟掉那個分頁的 SNAP，下次再重讀。
+// SNAP 掛在這次動作的紀錄（REC.snap）上，換一個動作就是新的，不會拿到上一個動作留下的舊資料
+function snapGrid(s) {
+  const name = s.getName(), m = REC.snap || (REC.snap = {});
+  if (!m[name]) { const d = s.getDataRange(); m[name] = { v: d.getValues(), f: d.getFormulas() }; }
+  return m[name];
+}
+function unsnap(s) { if (REC && REC.snap) delete REC.snap[s.getName()]; }
 function snap(range) {
   if (REC) {
-    const f = range.getFormulas(), v = range.getValues();
-    REC.ops.push({ t: 'cells', sh: range.getSheet().getName(), r: range.getRow(), c: range.getColumn(),
-      d: v.map((row, i) => row.map((x, j) => f[i][j] || (x instanceof Date ? { $d: x.getTime() } : x))) });
+    const g = snapGrid(range.getSheet()), r0 = range.getRow(), c0 = range.getColumn(), nr = range.getNumRows(), nc = range.getNumColumns(), d = [];
+    for (let i = 0; i < nr; i++) {
+      const fr = g.f[r0 - 1 + i] || [], vr = g.v[r0 - 1 + i] || [], row = [];
+      for (let j = 0; j < nc; j++) {
+        const f = fr[c0 - 1 + j], x = vr[c0 - 1 + j];
+        row.push(f || (x instanceof Date ? { $d: x.getTime() } : x === undefined ? '' : x));
+      }
+      d.push(row);
+    }
+    REC.ops.push({ t: 'cells', sh: range.getSheet().getName(), r: r0, c: c0, d });
   }
   return range;
 }
-function recRow(t, s, row) { if (REC) REC.ops.push({ t, sh: s.getName(), row }); }
+function recRow(t, s, row) { unsnap(s); if (REC) REC.ops.push({ t, sh: s.getName(), row }); }
 function put(range, v) { snap(range); range.setValue(v); return range; }
 function putF(range, f) { snap(range); range.setFormula(f); return range; }
 function putVs(range, vals) { snap(range); range.setValues(vals); return range; }
 
 function applyUndo(ops) {
+  if (REC) REC.snap = {};
   ops.slice().reverse().forEach(op => {
     const t = sh(op.sh);
     if (op.t === 'cells') t.getRange(op.r, op.c, op.d.length, op.d[0].length).setValues(op.d.map(r => r.map(x => (x && x.$d != null ? new Date(x.$d) : x))));
@@ -1354,7 +1387,7 @@ function recSave() {
   for (let i = 0; i < j.length; i += 40000) parts.push('~' + j.slice(i, i + 40000));
   const row = s.getLastRow() + 1;
   s.getRange(row, 1, 1, 2 + parts.length).setValues([[now(), REC.desc].concat(parts)]);
-  const extra = s.getLastRow() - 1 - UNDO_KEEP;
+  const extra = row - 1 - UNDO_KEEP;
   if (extra > 0) s.deleteRows(2, extra);
   REC = null;
 }
@@ -1474,6 +1507,7 @@ function addTo(cell, delta) {
 
 // 設定數字格式；Google 表格（Table）裡有指定類型的欄位不准改格式，那種欄位本來就會自動套格式，略過即可
 function fmtCell(range, f) {
+  if (REC) snapGrid(range.getSheet());
   try { range.setNumberFormat(f); } catch (err) {}
   return range;
 }
