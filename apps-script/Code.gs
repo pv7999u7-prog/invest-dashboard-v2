@@ -8,7 +8,7 @@
 const KEY = '請改成你自己的密碼';
 
 // 程式碼版本（App 設定頁會顯示，用來確認部署的是不是最新版；這行不用改）
-const SCRIPT_VERSION = 27;
+const SCRIPT_VERSION = 28;
 
 // 要讀的工作表與範圍（試算表版面有大改時，才需要調整這裡）
 const RANGES = {
@@ -97,14 +97,20 @@ function doGet() {
 /* ================================================================
    讀取
    ================================================================ */
+// 每碰一次試算表大約要 0.15～0.3 秒，所以讀取期間每個分頁只整張讀一次（RC），後面都從記憶體拿
 function readAll() {
+  RC = {};
+  try { return readAllCached(); } finally { RC = null; }
+}
+
+function readAllCached() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const tz = ss.getSpreadsheetTimeZone();
   const data = {};
   const isDateValue = v => Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v.getTime());
   Object.keys(RANGES).forEach(name => {
     const [sheetName, a1] = RANGES[name];
-    const sheet = ss.getSheetByName(sheetName);
+    const sheet = cachedSheet(sheetName);
     if (!sheet) { data[name] = []; return; }
     const rows = sheet.getRange(a1).getValues().map(row => row.map(v =>
       isDateValue(v) ? Utilities.formatDate(v, tz, 'yyyy/MM/dd') : v));
@@ -142,7 +148,8 @@ function editInfo() {
   info.plan = planInfo();
   info.loans = loanRows();
   info.career = careerInfo();
-  info.crypto = { coins: cryptoRows(), cash: cryptoCash().qty };
+  const coins = cryptoRows(), usdt = coins.find(x => x.name === CRYPTO_CASH[0] && x.where === CRYPTO_CASH[1]);
+  info.crypto = { coins, cash: usdt ? usdt.qty : 0 };
   info.house = houseRows();
   info.undo = undoInfo();
   info.cash = cashAccounts();
@@ -673,7 +680,8 @@ function lastRowOf(s, col, header) {
 }
 
 function findRow(s, col, text) {
-  const vals = s.getRange(`${col}1:${col}400`).getDisplayValues();
+  const vals = s.cached ? s.getRange(`${col}1:${col}400`).getValues().map(r => [typeof r[0] === 'string' ? r[0] : ''])
+    : s.getRange(`${col}1:${col}400`).getDisplayValues();
   const i = vals.findIndex(r => r[0].trim() === text);
   if (i < 0) throw new Error(`「${s.getName()}」找不到「${text}」`);
   return i + 1;
@@ -952,9 +960,9 @@ function liveSheet() {
 // { 'TW:2330': {price, prev, at(毫秒)} }
 function liveRows() {
   const s = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(LIVE_SHEET), out = {};
-  if (!s || s.getLastRow() < 2) return out;
-  s.getRange(2, 1, s.getLastRow() - 1, 4).getValues().forEach(r => {
-    out[String(r[0])] = { price: num(r[1]), prev: num(r[2]), at: r[3] instanceof Date ? r[3].getTime() : 0 };
+  if (!s) return out;
+  s.getDataRange().getValues().slice(1).forEach(r => {
+    if (String(r[0]) !== '') out[String(r[0])] = { price: num(r[1]), prev: num(r[2]), at: r[3] instanceof Date ? r[3].getTime() : 0 };
   });
   return out;
 }
@@ -1065,7 +1073,8 @@ function dailyChanges() {
     s.getRange(1, 1, 1, 3).setValues([['代號（App 用，請勿修改）', '現價', '昨收']]);
     s.hideSheet();
   }
-  const last = s.getLastRow(), have = last > 1 ? s.getRange(2, 1, last - 1, 1).getValues().map(r => String(r[0])) : [];
+  let all = s.getDataRange().getValues();
+  const have = all.slice(1).map(r => String(r[0]));
   const add = keys.filter((k, i) => keys.indexOf(k) === i && have.indexOf(k) < 0);
   if (add.length) {
     // 台股：先試 TPE:代號，不行再補一個 0（試算表裡 00878 寫成 0878）；美股直接用代號；加密貨幣用前一天的歷史價格當昨收
@@ -1079,9 +1088,10 @@ function dailyChanges() {
     const start = s.getLastRow() + 1;
     s.getRange(start, 1, add.length, 3).setValues(add.map((k, i) => [k].concat(f(k, start + i))));
     SpreadsheetApp.flush();
+    all = s.getDataRange().getValues();
   }
-  const out = {}, n = s.getLastRow() - 1;
-  if (n > 0) s.getRange(2, 1, n, 3).getValues().forEach(r => { const now = num(r[1]), prev = num(r[2]); if (now > 0 && prev > 0) out[String(r[0])] = now / prev - 1; });
+  const out = {};
+  all.slice(1).forEach(r => { const now = num(r[1]), prev = num(r[2]); if (now > 0 && prev > 0) out[String(r[0])] = now / prev - 1; });
   // 即時價（證交所、Finnhub、Kraken）一小時內抓過的，優先用它的現價和昨收
   const live = liveRows(), fresh = Date.now() - 3600 * 1000;
   Object.keys(live).forEach(k => { const x = live[k]; if (x.at >= fresh && x.price > 0 && x.prev > 0) out[k] = x.price / x.prev - 1; });
@@ -1361,18 +1371,64 @@ function undoLast() {
 
 function undoInfo() {
   const s = undoSheet(false);
-  if (!s || s.getLastRow() < 2) return { count: 0 };
-  const r = s.getLastRow(), v = s.getRange(r, 1, 1, 2).getDisplayValues()[0];
-  return { count: r - 1, time: v[0], desc: v[1] };
+  if (!s) return { count: 0 };
+  const rows = s.getRange(1, 1, UNDO_KEEP + 10, 2).getDisplayValues();
+  let r = rows.length; while (r > 0 && rows[r - 1][0] === '' && rows[r - 1][1] === '') r--;
+  if (r < 2) return { count: 0 };
+  return { count: r - 1, time: rows[r - 1][0], desc: rows[r - 1][1] };
 }
 
 /* ================================================================
    小工具
    ================================================================ */
 function sh(name) {
-  const s = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
+  const s = RC ? cachedSheet(name) : SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
   if (!s) throw new Error('找不到分頁：' + name);
   return s;
+}
+
+/* ================================================================
+   讀取用的記憶體分頁：整張的值只讀一次，getRange(...).getValues() 從記憶體切出來（超出範圍補空白）。
+   公式和顯示文字用到的地方很少，照樣去讀真的試算表。只在 readAll 期間使用（RC 不是 null），寫入一律用真的分頁。
+   ================================================================ */
+let RC = null;
+
+function cachedSheet(name) {
+  if (name in RC) return RC[name];
+  const real = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
+  if (!real) return (RC[name] = null);
+  const grid = real.getDataRange().getValues();
+  const a1 = a => {
+    const m = String(a).match(/^\$?([A-Za-z]+)\$?(\d+)(?::\$?([A-Za-z]+)\$?(\d+))?$/);
+    if (!m) throw new Error('看不懂的範圍：' + a);
+    const col = t => t.toUpperCase().split('').reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0);
+    const r = Number(m[2]), c = col(m[1]);
+    return m[3] ? [r, c, Number(m[4]) - r + 1, col(m[3]) - c + 1] : [r, c, 1, 1];
+  };
+  const sheet = {
+    cached: true,
+    getName: () => name,
+    getLastRow: () => (grid.length === 1 && grid[0].every(v => v === '') ? 0 : grid.length),
+    getRange(r, c, nr, nc) {
+      if (typeof r === 'string') [r, c, nr, nc] = a1(r);
+      nr = nr || 1; nc = nc || 1;
+      const realRange = () => real.getRange(r, c, nr, nc);
+      const getValues = () => {
+        const out = [];
+        for (let i = 0; i < nr; i++) {
+          const src = grid[r - 1 + i] || [], row = [];
+          for (let j = 0; j < nc; j++) { const v = src[c - 1 + j]; row.push(v === undefined ? '' : v); }
+          out.push(row);
+        }
+        return out;
+      };
+      return { getValues, getValue: () => getValues()[0][0],
+        getFormulas: () => realRange().getFormulas(), getFormula: () => realRange().getFormula(),
+        getDisplayValues: () => realRange().getDisplayValues(),
+        getRow: () => r, getColumn: () => c, getSheet: () => real };
+    }
+  };
+  return (RC[name] = sheet);
 }
 
 function num(v) {
