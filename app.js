@@ -4,7 +4,7 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '3.2.6';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const APP_VERSION = '3.2.7';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
 const LATEST_SCRIPT = 26;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
@@ -1527,9 +1527,21 @@ function loanChart(host, l) {
   tip.onClose = leave;
 }
 
+// 里程碑的日期是自己打的文字（20261105、202611、202401~202403、2026/11/05…），取開頭的年月日當排序依據；看不懂的回傳 0
+function milestoneKey(s) {
+  const m = str(s).match(/^(\d{4})[\/\-.年]?(\d{1,2})?[\/\-.月]?(\d{1,2})?/);
+  return m ? Number(m[1]) * 10000 + Number(m[2] || 0) * 100 + Number(m[3] || 0) : 0;
+}
+// 依日期由舊到新排（後來才補登的早期事件也會排到對的位置）；日期看不懂的跟著試算表裡的上一筆
+function sortMilestones(list) {
+  let last = 0;
+  return list.map((m, i) => ({ m, i, k: (last = milestoneKey(m.date) || last) }))
+    .sort((a, b) => a.k - b.k || a.i - b.i).map(x => x.m);
+}
+
 function pageMilestone(d) {
   // 有 Apps Script 的編輯資訊時用它（帶列號，點了可以編輯）；否則用一般讀到的資料
-  const e = ed(), list = e ? e.milestones : (d.milestone || []);
+  const e = ed(), list = sortMilestones(e ? e.milestones : (d.milestone || []));
   return `${head('里程碑', [['＋ 新增', 'milestone']])}${e ? '<p class="hint" style="margin:-6px 0 10px">點項目可以修改或刪除</p>' : ''}
   <div class="card"><ul class="tl">${list.slice().reverse().map(m => `<li${e ? ` class="link" data-form="milestone" data-arg="${m.row}"` : ''}><div class="d">${esc(m.date)}</div><div class="x">${esc(m.text)}</div></li>`).join('')}</ul></div>`;
 }
