@@ -8,7 +8,7 @@
 const KEY = '請改成你自己的密碼';
 
 // 程式碼版本（App 設定頁會顯示，用來確認部署的是不是最新版；這行不用改）
-const SCRIPT_VERSION = 29;
+const SCRIPT_VERSION = 30;
 
 // 要讀的工作表與範圍（試算表版面有大改時，才需要調整這裡）
 const RANGES = {
@@ -103,14 +103,16 @@ function doGet() {
    ================================================================ */
 // 每碰一次試算表大約要 0.15～0.3 秒，所以讀取期間每個分頁只整張讀一次（RC），後面都從記憶體拿
 function readAll() {
-  RC = {};
-  try { return readAllCached(); } finally { RC = null; }
+  RC = {}; BG = null;
+  try { return readAllCached(); } finally { RC = null; BG = null; }
 }
 
 function readAllCached() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const tz = ss.getSpreadsheetTimeZone();
   const data = {};
+  BG = batchGrids(Object.keys(RANGES).map(k => RANGES[k][0]).concat(['Price']));
+  data._batch = BATCH;
   const isDateValue = v => Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v.getTime());
   Object.keys(RANGES).forEach(name => {
     const [sheetName, a1] = RANGES[name];
@@ -1426,11 +1428,98 @@ function sh(name) {
    ================================================================ */
 let RC = null;
 
+/* ================================================================
+   一次讀完：用 Google Sheets 進階服務（Apps Script 編輯器左邊「服務」→ 加入 Google Sheets API）
+   一次把要用的分頁全部讀回來。一個分頁一個分頁讀，每次大約 0.3～0.4 秒；一次讀完只要一兩次連線。
+   沒有加入這個服務就照原本的方式讀，功能一樣，只是比較慢。
+   進階服務回傳的日期是數字（序號），所以讀兩次：一次要數字、一次要日期變文字，
+   「第一次是數字、第二次是文字」的格子就是日期，換成和原本讀法一樣的 Date。
+   每一版第一次用的時候會和原本的讀法整份比對，不一樣就退回原本的讀法（App 設定頁會顯示原因）。
+   ================================================================ */
+let BG = null;       // { 分頁名稱: 二維陣列 }；null 表示這次不用
+let BATCH = 'off';   // 回報給 App：'off' 沒加入服務、'on' 使用中、其他是退回原本讀法的原因
+
+function batchGrids(names) {
+  BATCH = 'off';
+  if (typeof Sheets === 'undefined' || !Sheets.Spreadsheets) return null;
+  const props = PropertiesService.getScriptProperties(), key = 'batch-v' + SCRIPT_VERSION, st = props.getProperty(key) || '';
+  if (st.indexOf('不一致') === 0) { BATCH = st; return null; }
+  try {
+    const grids = batchRead(names);
+    if (st !== '1') {
+      const diff = batchDiff(grids);
+      if (diff) {
+        // 價格剛好在兩次讀取之間跳動也會不一樣，所以連續三次都不一樣才停用
+        const n = (Number(st.slice(1)) || 0) + 1;
+        props.setProperty(key, n >= 3 ? ('不一致：' + diff).slice(0, 300) : 'f' + n);
+        BATCH = '不一致：' + diff;
+        return null;
+      }
+      props.setProperty(key, '1');
+    }
+    BATCH = 'on';
+    return grids;
+  } catch (err) {
+    BATCH = '錯誤：' + String(err.message || err).slice(0, 200);
+    return null;
+  }
+}
+
+function batchRead(names) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet(), tz = ss.getSpreadsheetTimeZone(), id = ss.getId();
+  const have = ss.getSheets().map(s => s.getName());
+  const want = names.filter((n, i) => names.indexOf(n) === i && have.indexOf(n) >= 0);
+  const ranges = want.map(n => "'" + n.replace(/'/g, "''") + "'");
+  const get = dt => Sheets.Spreadsheets.Values.batchGet(id, { ranges, valueRenderOption: 'UNFORMATTED_VALUE', dateTimeRenderOption: dt }).valueRanges;
+  const nums = get('SERIAL_NUMBER'), strs = get('FORMATTED_STRING'), out = {}, offs = {};
+  want.forEach((n, i) => {
+    const a = nums[i].values || [], b = strs[i].values || [];
+    out[n] = a.map((row, r) => row.map((v, c) => {
+      if (typeof v !== 'number') return v == null ? '' : v;
+      return typeof (b[r] || [])[c] === 'string' ? serialToDate(v, tz, offs) : v;
+    }));
+  });
+  return out;
+}
+
+// 試算表的日期序號（1899/12/30 起算的天數，試算表時區的時間）→ Date
+function serialToDate(serial, tz, offs) {
+  const wall = Math.round((serial - 25569) * 86400000), day = Math.floor(serial);
+  if (offs[day] === undefined) {
+    const m = String(Utilities.formatDate(new Date(wall), tz, 'Z')).match(/^([+-])(\d\d):?(\d\d)$/);
+    offs[day] = m ? (m[1] === '-' ? -1 : 1) * (Number(m[2]) * 3600000 + Number(m[3]) * 60000) : 0;
+  }
+  return new Date(wall - offs[day]);
+}
+
+// 和原本的讀法比對，回傳第一個不一樣的地方（都一樣回傳空字串）。數字差 5% 以內算一樣（價格會跳動）
+function batchDiff(grids) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet(), isD = v => Object.prototype.toString.call(v) === '[object Date]';
+  const show = v => (isD(v) ? '日期 ' + v.toISOString() : typeof v + ' ' + String(v)).slice(0, 40);
+  const same = (x, y) => {
+    if (isD(x) || isD(y)) return isD(x) && isD(y) && Math.abs(x.getTime() - y.getTime()) < 1000;
+    if (typeof x === 'number' && typeof y === 'number') return Math.abs(x - y) <= 0.05 * Math.max(Math.abs(x), Math.abs(y)) + 1e-9;
+    return x === y;
+  };
+  for (const name of Object.keys(grids)) {
+    const a = grids[name], b = ss.getSheetByName(name).getDataRange().getValues();
+    const rows = Math.max(a.length, b.length);
+    for (let r = 0; r < rows; r++) {
+      const ra = a[r] || [], rb = b[r] || [], cols = Math.max(ra.length, rb.length);
+      for (let c = 0; c < cols; c++) {
+        const x = ra[c] === undefined ? '' : ra[c], y = rb[c] === undefined ? '' : rb[c];
+        if (!same(x, y)) return `${name} 第 ${r + 1} 列第 ${c + 1} 欄：${show(x)} ≠ ${show(y)}`;
+      }
+    }
+  }
+  return '';
+}
+
 function cachedSheet(name) {
   if (name in RC) return RC[name];
   const real = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
   if (!real) return (RC[name] = null);
-  const grid = real.getDataRange().getValues();
+  const grid = BG && BG[name] ? BG[name] : real.getDataRange().getValues();
   const a1 = a => {
     const m = String(a).match(/^\$?([A-Za-z]+)\$?(\d+)(?::\$?([A-Za-z]+)\$?(\d+))?$/);
     if (!m) throw new Error('看不懂的範圍：' + a);

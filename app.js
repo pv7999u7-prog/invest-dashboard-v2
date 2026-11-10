@@ -4,8 +4,8 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '3.4.0';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
-const LATEST_SCRIPT = 29;   // 最新 Code.gs 的 SCRIPT_VERSION
+const APP_VERSION = '3.4.1';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const LATEST_SCRIPT = 30;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
 
@@ -1590,6 +1590,14 @@ function liveLine() {
   const when = t ? `${t.getMonth() + 1}/${t.getDate()} ${pad(t.getHours())}:${pad(t.getMinutes())}` : '還沒抓過';
   return `<p class="msg" style="margin:4px 0 0;text-align:center;color:var(--text-muted)">即時股價：${when}・台股證交所、加密貨幣 Kraken・美股 ${l.finnhub ? 'Finnhub' : '未設定 Finnhub 金鑰（用 GOOGLEFINANCE）'}</p>`;
 }
+// 「一次讀完」（Google Sheets 進階服務）的狀態：Apps Script 第 30 版起才有
+function batchLine() {
+  const b = state.raw && state.raw._batch;
+  if (!b) return '';
+  const t = b === 'on' ? '一次讀完：使用中' : b === 'off' ? '一次讀完：未啟用（Apps Script 左邊「服務」加入 Google Sheets API 後重新部署）' : '一次讀完：已退回原本讀法（' + esc(b) + '）';
+  return `<p class="msg" style="margin:4px 0 0;text-align:center;color:var(--text-muted)">${t}</p>`;
+}
+
 // 最近一次更新、寫入、更新股價各花的時間：Google 那邊各階段（Apps Script 回報）＋其餘（網路與 Apps Script 啟動）
 function timingLine() {
   const sec = v => dec(v / 1000, 1) + ' 秒';
@@ -1616,6 +1624,7 @@ function pageSettings(first) {
     ${first ? '' : '<button class="btn ghost" id="cfgClear">清除這台裝置上的資料與設定</button>'}
     <p class="msg" style="margin:12px 0 0;text-align:center;color:var(--text-muted)">App 版本 ${APP_VERSION}${state.raw ? `・Apps Script 第 ${scriptVersion()} 版${scriptVersion() < LATEST_SCRIPT ? `（最新是第 ${LATEST_SCRIPT} 版，請更新）` : '（最新）'}` : ''}</p>
     ${liveLine()}
+    ${batchLine()}
     ${timingLine()}
   </div>
   ${first ? '' : securitySection(canBio)}`;
