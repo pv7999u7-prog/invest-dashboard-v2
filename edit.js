@@ -1,4 +1,6 @@
 // 輸入表單：從 App 寫回試算表。送出後 Apps Script 會回傳最新資料，畫面直接更新。
+// 寫入在背景進行：按下送出表單就收起來，可以繼續看別的頁面；寫完跳出結果，失敗會把表單原樣打開。
+// 寫入途中不能再開別的表單或復原（表單用的列號要等這次寫完才是新的）。
 // 表單需要的現值與位置都來自 Apps Script 的 _edit（state.raw._edit），不寫死在程式裡。
 'use strict';
 
@@ -29,7 +31,8 @@ async function send(action, payload) {
 }
 
 // undoable：寫入成功後的提示多一個「復原」按鈕，6 秒內可以直接按
-function toast(msg, undoable) {
+const WRITING_MSG = '上一筆還在寫入，請等它完成';
+function toast(msg, undoable, sticky) {
   let t = $('#toast');
   if (!t) { t = document.createElement('div'); t.id = 'toast'; document.body.appendChild(t); }
   t.innerHTML = esc(msg) + (undoable ? '<button type="button" class="tundo">復原</button>' : '');
@@ -37,21 +40,24 @@ function toast(msg, undoable) {
   const b = t.querySelector('.tundo');
   if (b) b.addEventListener('click', () => { t.classList.remove('show'); doUndo(true); });
   t.classList.add('show');
-  clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), undoable ? 6000 : 2600);
+  clearTimeout(toast.t); if (!sticky) toast.t = setTimeout(() => t.classList.remove('show'), undoable ? 6000 : 2600);
 }
 
 // 復原上一步（從 App 做的最後一次修改）
 async function doUndo(quick) {
   const u = ed() && ed().undo;
+  if (state.writing) { toast(WRITING_MSG); return; }
   if (!quick && !confirm(`要復原「${(u && u.desc) || '上一步'}」嗎？`)) return;
-  toast('復原中…');
-  try { const msg = await send('undo', {}); render(); toast('✓ ' + msg); }
-  catch (e) { toast(e.message === 'Failed to fetch' || e.name === 'TypeError' ? '連不上，請檢查網路' : e.message); }
+  state.writing = true; setStatus(state.status);
+  toast('復原中…', false, true);
+  try { const msg = await send('undo', {}); state.writing = false; setStatus(state.status); render(); toast('✓ ' + msg); }
+  catch (e) { state.writing = false; setStatus(state.status); toast(e.message === 'Failed to fetch' || e.name === 'TypeError' ? '連線中斷，不確定有沒有復原，請下拉更新確認' : e.message); }
 }
 
 /* ---------- 表單外框 ---------- */
 // spec: { title, body(html), submit(form) → [action, payload] 或 null, after(form), extra: [{label, cls, run(form)}] }
 function openSheet(spec) {
+  if (state.writing) { toast(WRITING_MSG); return; }
   closeSheet();
   const o = document.createElement('div');
   o.className = 'overlay'; o.id = 'sheet';
@@ -75,16 +81,23 @@ function openSheet(spec) {
     let req;
     try { req = getReq(); } catch (e) { err.textContent = e.message; return; }
     if (!req) return;
-    const btns = f.querySelectorAll('.btn');
-    btns.forEach(b => { b.disabled = true; });
-    const first = btns[0], label = first.textContent;
-    first.textContent = '寫入中…';
+    if (state.writing) { err.textContent = WRITING_MSG; return; }
+    // 表單先收起來（不刪掉：失敗的話原樣打開，填的內容還在）
+    state.writing = true;
+    o.style.display = 'none'; document.body.classList.remove('noscroll');
+    setStatus(state.status);
+    toast(`「${spec.title}」寫入中…`, false, true);
     try {
       const msg = await send(req[0], req[1]);
-      closeSheet(); render(); toast('✓ ' + msg, true);
+      state.writing = false;
+      o.remove(); setStatus(state.status); render(); toast('✓ ' + msg, true);
     } catch (e) {
-      err.textContent = e.message === 'Failed to fetch' || e.name === 'TypeError' ? '連不上，請檢查網路' : e.message;
-      btns.forEach(b => { b.disabled = false; }); first.textContent = label;
+      state.writing = false;
+      const net = e.message === 'Failed to fetch' || e.name === 'TypeError';
+      err.textContent = net ? '連線中斷，不確定有沒有寫入。請先關掉表單、下拉更新確認，沒寫入再送一次。' : e.message;
+      o.style.display = ''; document.body.classList.add('noscroll');
+      setStatus(state.status);
+      toast(`✗「${spec.title}」沒有寫入`);
     }
   };
   f.addEventListener('submit', e => { e.preventDefault(); run(() => spec.submit(f)); });
@@ -599,6 +612,7 @@ function bindEdit() {
     ev.stopPropagation();
     if (!ed()) { toast('請先更新 Apps Script 到最新版'); return; }
     if (hidden) { toast('先按右上角的眼睛顯示數字，再編輯'); return; }
+    if (state.writing) { toast(WRITING_MSG); return; }
     FORMS[el.dataset.form](el.dataset.arg);
   }));
   // 明細頁：切換種類、復原上一步

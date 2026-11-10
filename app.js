@@ -4,7 +4,7 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '3.3.2';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const APP_VERSION = '3.4.0';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
 const LATEST_SCRIPT = 29;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
@@ -621,7 +621,7 @@ function combineTw(d) {
 /* ================================================================
    資料讀取與快取
    ================================================================ */
-let state = { cfg: null, raw: null, updated: '', data: null, status: 'idle', error: '', lastFetch: 0, seq: 0, timing: {} };
+let state = { cfg: null, raw: null, updated: '', data: null, status: 'idle', error: '', lastFetch: 0, seq: 0, timing: {}, writing: false };
 const LIVE_STALE_MS = 2 * 60000;   // 即時股價超過這麼久沒更新，讀到資料後再另外要求抓一次
 
 // 送到 Apps Script；順便記下這次花了多久（設定頁會顯示，用來看慢在哪裡）
@@ -647,13 +647,15 @@ function loadLocal() {
 async function refresh() {
   if (lock.locked) return;
   if (!state.cfg || !state.cfg.url) { setStatus('idle'); return; }
-  if (state.status === 'busy') return;
+  if (state.status === 'busy' || state.writing) return;
   setStatus('busy');
   if (!state.data) render();
-  state.seq++;
+  const seq = ++state.seq;
   try {
     const j = await post({}, '更新');
     if (!j.ok) throw new Error(j.error === 'unauthorized' ? '密碼不對' : (j.error || '讀取失敗'));
+    // 更新途中做了寫入：這次讀到的可能是寫入前的舊資料，丟掉（寫入完成時會帶回最新資料）
+    if (seq !== state.seq) { if (state.status === 'busy') setStatus(state.data ? 'ok' : 'idle'); return; }
     state.raw = j.data; state.updated = j.updated; state.data = parseAll(j.data); state.lastFetch = Date.now();
     await persist();
     setStatus('ok');
@@ -693,7 +695,7 @@ function setStatus(s) {
   const el = $('#status'), tx = $('#statusText');
   el.className = 'status ' + s;
   const upd = state.updated ? state.updated.slice(5) : '';
-  tx.textContent = s === 'busy' ? '更新中…' : s === 'ok' ? (state.liveBusy ? '更新股價中…' : '已更新 ' + upd) : s === 'err' ? (upd ? '更新失敗・顯示 ' + upd : state.error || '更新失敗') : upd ? '上次 ' + upd : '';
+  tx.textContent = state.writing ? '寫入中…' : s === 'busy' ? '更新中…' : s === 'ok' ? (state.liveBusy ? '更新股價中…' : '已更新 ' + upd) : s === 'err' ? (upd ? '更新失敗・顯示 ' + upd : state.error || '更新失敗') : upd ? '上次 ' + upd : '';
 }
 
 /* ================================================================
