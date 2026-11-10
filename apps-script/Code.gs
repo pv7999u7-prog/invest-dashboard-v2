@@ -8,7 +8,7 @@
 const KEY = '請改成你自己的密碼';
 
 // 程式碼版本（App 設定頁會顯示，用來確認部署的是不是最新版；這行不用改）
-const SCRIPT_VERSION = 26;
+const SCRIPT_VERSION = 27;
 
 // 要讀的工作表與範圍（試算表版面有大改時，才需要調整這裡）
 const RANGES = {
@@ -42,9 +42,13 @@ function doPost(e) {
   if (!expected || expected.startsWith('請改成') || String(body.key || '').trim() !== expected) {
     return json({ ok: false, error: 'unauthorized' });
   }
+  MS = { t0: Date.now() };
   ensureTrigger();
   try { ensureLiveTrigger(); } catch (err) {}
-  try { refreshLive(false); } catch (err) {}
+  // 即時價會讓整份試算表重算，很花時間：寫入時不抓（背景每 10 分鐘會抓）；
+  // 讀取時只有 App 另外要求（live）才抓，不然只在背景超過 15 分鐘沒跑時補抓
+  if (!body.action) { try { refreshLive(false, body.live ? 0 : 15 * 60 * 1000); } catch (err) {} }
+  mark('live');
   if (body.action) {
     const lock = LockService.getScriptLock();
     lock.waitLock(20000);
@@ -56,7 +60,9 @@ function doPost(e) {
       SpreadsheetApp.flush();
       if (REC) { REC.desc = msg || body.action; recSave(); }
       log(body.action, body.payload);
-      return json({ ok: true, message: msg || '已寫入試算表', updated: now(), data: readAll() });
+      mark('write');
+      const data = readAll();
+      return json({ ok: true, message: msg || '已寫入試算表', updated: now(), data, ms: msOut() });
     } catch (err) {
       // 寫到一半失敗：照記下的資料倒回去，不留半套
       let rolled = false;
@@ -70,7 +76,17 @@ function doPost(e) {
       lock.releaseLock();
     }
   }
-  return json({ ok: true, updated: now(), data: readAll() });
+  const data = readAll();
+  return json({ ok: true, updated: now(), data, ms: msOut() });
+}
+
+// 各階段花的時間（毫秒），App 設定頁會顯示，用來看慢在哪裡
+let MS = { t0: 0 };
+function mark(name) { const t = Date.now(); MS[name] = t - (MS.last || MS.t0); MS.last = t; }
+function msOut() {
+  const o = { total: Date.now() - MS.t0 };
+  ['live', 'write', 'ranges', 'edit', 'daily'].forEach(k => { if (MS[k] != null) o[k] = MS[k]; });
+  return o;
 }
 
 // 直接用瀏覽器打開網址時，只確認服務有在運作、是第幾版，不給資料
@@ -99,8 +115,11 @@ function readAll() {
   });
   data._sheetUrl = ss.getUrl();   // App「更多 → 原始資料」用來打開這份試算表
   data._scriptVersion = SCRIPT_VERSION;
+  mark('ranges');
   try { data._edit = editInfo(); } catch (err) { data._editError = String(err.message || err); }
+  mark('edit');
   try { data._daily = dailyChanges(); } catch (err) {}
+  mark('daily');
   try { data._live = liveInfo(); } catch (err) {}
   return data;
 }
@@ -110,7 +129,7 @@ function editInfo() {
   const tw = sh('台股'), us = sh('美股');
   const twH = holdings(tw);
   const info = { tw: { cash: num(tw.getRange('C3').getValue()), holdings: twH,
-    prices: twH.map(h => { const c = twPriceCell(tw, h); return { code: h.code, name: h.name, price: num(c.getValue()), manual: !c.getFormula() }; }) },
+    prices: twPrices(tw, twH) },
     us: { brokers: {} }, dca: dcaItems() };
   Object.keys(BROKERS).forEach(b => {
     info.us.brokers[b] = { cash: num(us.getRange('C' + BROKERS[b]).getValue()), holdings: usHoldings(b) };
@@ -695,6 +714,18 @@ function twPriceCell(s, h) {
   return m ? sh('Price').getRange(Number(m[1]), 3) : s.getRange(h.row, 14);
 }
 
+// 每一檔台股的現價與是不是手動填的：整批讀（持股清單 N 欄＋Price 分頁 C 欄），不要一檔一檔讀
+function twPrices(s, hs) {
+  if (!hs.length) return [];
+  const r0 = hs[0].row, own = s.getRange(r0, 14, hs[hs.length - 1].row - r0 + 1, 1), ownF = own.getFormulas(), ownV = own.getValues();
+  const pr = sh('Price').getRange('C1:C400'), pF = pr.getFormulas(), pV = pr.getValues();
+  return hs.map(h => {
+    const i = h.row - r0, m = String(ownF[i][0]).match(/^=\s*Price!\$?C\$?(\d+)\s*$/i), k = m ? Number(m[1]) - 1 : -1;
+    if (m && k >= pV.length) { const c = twPriceCell(s, h); return { code: h.code, name: h.name, price: num(c.getValue()), manual: !c.getFormula() }; }
+    return { code: h.code, name: h.name, price: num(m ? pV[k][0] : ownV[i][0]), manual: !(m ? pF[k][0] : ownF[i][0]) };
+  });
+}
+
 // manual：手動現價（上櫃等抓不到的），有填就寫數字，不放公式
 function addTwHolding(st, price, manual) {
   const p = sh('Price'), pr = firstEmpty(p, 'A', 2);
@@ -895,7 +926,7 @@ function houseRows() {
    即時價：台股用證交所公開報價、美股用 Finnhub（要金鑰）、加密貨幣用 Kraken
    抓到的價格寫在隱藏分頁「App 即時價」（代號、現價、昨收、抓取時間）。
    Price 分頁的價格公式會包一層：一小時內抓過的即時價優先，抓不到或太舊就用原本的公式（GOOGLEFINANCE 等）。
-   App 連線時超過 1 分鐘沒更新就先抓一次，另外每 10 分鐘自動更新。
+   每 10 分鐘自動更新；App 先讀到資料後，價格超過 2 分鐘沒更新會再另外要求抓一次（不擋住讀取和寫入）。
    Finnhub 金鑰放在 Apps Script「專案設定 → 指令碼屬性」的 FINNHUB_KEY，不寫在程式碼裡。
    ================================================================ */
 const LIVE_SHEET = 'App 即時價';
@@ -928,9 +959,10 @@ function liveRows() {
   return out;
 }
 
-function refreshLive(force) {
+// maxAge：上次抓的時間在這麼多毫秒以內就不重抓（沒給就是 1 分鐘）
+function refreshLive(force, maxAge) {
   const props = PropertiesService.getScriptProperties();
-  if (!force && Date.now() - Number(props.getProperty('live-at') || 0) < 60 * 1000) return;
+  if (!force && Date.now() - Number(props.getProperty('live-at') || 0) < (maxAge || 60 * 1000)) return;
   props.setProperty('live-at', String(Date.now()));
   const p = sh('Price'), uniq = a => a.filter((x, i) => x && a.indexOf(x) === i);
   const tw = uniq(p.getRange('A2:A200').getValues().map(r => String(r[0]).trim()));

@@ -18,9 +18,9 @@ function head(title, btns = []) {
 
 /* ---------- 送出 ---------- */
 async function send(action, payload) {
-  const res = await fetch(state.cfg.url, { method: 'POST', body: JSON.stringify({ key: state.cfg.key, action, payload }),
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' }, cache: 'no-store', redirect: 'follow' });
-  const j = await res.json();
+  state.seq++;
+  const j = await post({ action, payload }, '寫入');
+  state.seq++;
   if (!j.ok) throw new Error(j.error === 'unauthorized' ? '密碼不對' : (j.error || '寫入失敗'));
   state.raw = j.data; state.updated = j.updated; state.data = parseAll(j.data); state.lastFetch = Date.now();
   await persist();

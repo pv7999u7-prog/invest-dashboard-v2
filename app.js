@@ -4,8 +4,8 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '3.2.8';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
-const LATEST_SCRIPT = 26;   // 最新 Code.gs 的 SCRIPT_VERSION
+const APP_VERSION = '3.3.0';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const LATEST_SCRIPT = 27;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
 
@@ -621,7 +621,18 @@ function combineTw(d) {
 /* ================================================================
    資料讀取與快取
    ================================================================ */
-let state = { cfg: null, raw: null, updated: '', data: null, status: 'idle', error: '', lastFetch: 0 };
+let state = { cfg: null, raw: null, updated: '', data: null, status: 'idle', error: '', lastFetch: 0, seq: 0, timing: {} };
+const LIVE_STALE_MS = 2 * 60000;   // 即時股價超過這麼久沒更新，讀到資料後再另外要求抓一次
+
+// 送到 Apps Script；順便記下這次花了多久（設定頁會顯示，用來看慢在哪裡）
+async function post(body, kind) {
+  const t0 = Date.now();
+  const res = await fetch(state.cfg.url, { method: 'POST', body: JSON.stringify(Object.assign({ key: state.cfg.key }, body)),
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' }, cache: 'no-store', redirect: 'follow' });
+  const j = await res.json();
+  if (j.ok) state.timing[kind] = { total: Date.now() - t0, ms: j.ms || null };
+  return j;
+}
 
 function loadLocal() {
   loadLockRecord();
@@ -639,14 +650,15 @@ async function refresh() {
   if (state.status === 'busy') return;
   setStatus('busy');
   if (!state.data) render();
+  state.seq++;
   try {
-    const res = await fetch(state.cfg.url, { method: 'POST', body: JSON.stringify({ key: state.cfg.key }), headers: { 'Content-Type': 'text/plain;charset=utf-8' }, cache: 'no-store', redirect: 'follow' });
-    const j = await res.json();
+    const j = await post({}, '更新');
     if (!j.ok) throw new Error(j.error === 'unauthorized' ? '密碼不對' : (j.error || '讀取失敗'));
     state.raw = j.data; state.updated = j.updated; state.data = parseAll(j.data); state.lastFetch = Date.now();
     await persist();
     setStatus('ok');
     render();
+    refreshLivePrices();
   } catch (e) {
     state.error = e.message === 'Failed to fetch' || e.name === 'TypeError' ? '連不上，請檢查網路或網址' : e.message;
     setStatus('err');
@@ -654,12 +666,34 @@ async function refresh() {
   }
 }
 
+// 資料先顯示出來，股價太舊再另外請 Apps Script 抓即時價（抓價會讓試算表重算，比較久，所以不擋住前面的讀取）
+// 這段時間如果又做了更新或寫入，就丟掉這次的結果，免得把比較新的資料蓋掉
+async function refreshLivePrices() {
+  const l = state.raw && state.raw._live;
+  if (!l || scriptVersion() < 27 || Date.now() - (l.at || 0) < LIVE_STALE_MS || state.liveBusy) return;
+  const seq = state.seq;
+  state.liveBusy = true;
+  setStatus('ok');
+  try {
+    const j = await post({ live: true }, '更新股價');
+    if (j.ok && seq === state.seq && !lock.locked) {
+      state.raw = j.data; state.updated = j.updated; state.data = parseAll(j.data); state.lastFetch = Date.now();
+      await persist();
+      state.liveBusy = false;
+      setStatus('ok');
+      render();
+    }
+  } catch (e) {}
+  state.liveBusy = false;
+  if (state.status === 'ok') setStatus('ok');
+}
+
 function setStatus(s) {
   state.status = s;
   const el = $('#status'), tx = $('#statusText');
   el.className = 'status ' + s;
   const upd = state.updated ? state.updated.slice(5) : '';
-  tx.textContent = s === 'busy' ? '更新中…' : s === 'ok' ? '已更新 ' + upd : s === 'err' ? (upd ? '更新失敗・顯示 ' + upd : state.error || '更新失敗') : upd ? '上次 ' + upd : '';
+  tx.textContent = s === 'busy' ? '更新中…' : s === 'ok' ? (state.liveBusy ? '更新股價中…' : '已更新 ' + upd) : s === 'err' ? (upd ? '更新失敗・顯示 ' + upd : state.error || '更新失敗') : upd ? '上次 ' + upd : '';
 }
 
 /* ================================================================
@@ -1554,6 +1588,18 @@ function liveLine() {
   const when = t ? `${t.getMonth() + 1}/${t.getDate()} ${pad(t.getHours())}:${pad(t.getMinutes())}` : '還沒抓過';
   return `<p class="msg" style="margin:4px 0 0;text-align:center;color:var(--text-muted)">即時股價：${when}・台股證交所、加密貨幣 Kraken・美股 ${l.finnhub ? 'Finnhub' : '未設定 Finnhub 金鑰（用 GOOGLEFINANCE）'}</p>`;
 }
+// 最近一次更新、寫入、更新股價各花的時間：Google 那邊各階段（Apps Script 回報）＋其餘（網路與 Apps Script 啟動）
+function timingLine() {
+  const sec = v => dec(v / 1000, 1) + ' 秒';
+  return ['更新', '寫入', '更新股價'].filter(k => state.timing[k]).map(k => {
+    const t = state.timing[k], m = t.ms;
+    const parts = m ? [['抓即時價', m.live], ['寫入', m.write], ['讀分頁', m.ranges], ['讀表單資料', m.edit], ['讀漲跌', m.daily]]
+      .filter(x => x[1] >= 50).map(x => x[0] + ' ' + sec(x[1])) : [];
+    if (m) parts.push('網路與啟動 ' + sec(Math.max(0, t.total - m.total)));
+    return `<p class="msg" style="margin:4px 0 0;text-align:center;color:var(--text-muted)">上次${k} ${sec(t.total)}${parts.length ? '（' + parts.join('、') + '）' : ''}</p>`;
+  }).join('');
+}
+
 function pageSettings(first) {
   const c = state.cfg || {};
   return `<h1 class="title">${first ? '開始使用' : '設定'}</h1>
@@ -1568,6 +1614,7 @@ function pageSettings(first) {
     ${first ? '' : '<button class="btn ghost" id="cfgClear">清除這台裝置上的資料與設定</button>'}
     <p class="msg" style="margin:12px 0 0;text-align:center;color:var(--text-muted)">App 版本 ${APP_VERSION}${state.raw ? `・Apps Script 第 ${scriptVersion()} 版${scriptVersion() < LATEST_SCRIPT ? `（最新是第 ${LATEST_SCRIPT} 版，請更新）` : '（最新）'}` : ''}</p>
     ${liveLine()}
+    ${timingLine()}
   </div>
   ${first ? '' : securitySection(canBio)}`;
 }
