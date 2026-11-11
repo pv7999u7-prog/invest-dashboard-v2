@@ -1437,7 +1437,7 @@ function pageCareer(d) {
     <div class="legend"><span><i style="background:var(--s1)"></i>年收入：當年 1–2 月年前分紅＋當年年中分紅</span><span><i style="background:var(--s3)"></i>年度年收入：當年年中分紅＋隔年 1–2 月年前分紅</span></div>
     ${chart('c-income', el => columnChart(el, full.map(y => "'" + String(y.year).slice(2)), [{ name: '年收入', color: '--s1', values: full.map(y => inc(y) / 10000) },
       { name: '年度年收入', color: '--s3', values: full.map(y => (fin(y) ? fin(y) / 10000 : null)) }],
-      { axis: v => dec(v, 0), topLabel: v => dec(v, 0), maxBar: 18, tip: i => { const y = full[i];
+      { axis: v => dec(v, 0), topLabel: v => dec(v, 0), labelSeries: [1], maxBar: 18, tip: i => { const y = full[i];
         const fy = fin(y) ? tr('年度年收入', ntd(fin(y)) + (y.fiscalMonths ? `（${dec(y.fiscalMonths, 1)} 個月）` : '')) : tr('年度年收入', '隔年年前分紅還沒發');
         if (y.est) return `<b>${y.year}・預估</b>${tr('年前分紅', ntd(y.yeTotal || 0))}${tr('年中分紅', ntd(y.bonus))}${tr('月薪', (hidden ? MASK : int(y.estFirst) + '×6＋' + int(y.estLast) + '×6'))}${y.ot ? tr('加班', ntd(y.ot)) : ''}${tr('合計', ntd(y.annualTotal))}${fy}`;
         return `<b>${y.year}・${esc(y.title)}</b>${tr('年收入', ntd(y.annual))}${y.ot ? tr('加班', ntd(y.ot)) : ''}${y.annualTotal ? tr('合計', ntd(y.annualTotal)) : ''}${y.yeTotal ? tr('年前分紅', ntd(y.yeTotal)) : ''}${y.bonus ? tr('年中分紅', ntd(y.bonus)) : ''}${y.months ? tr('相當', dec(y.months, 1) + ' 個月') : ''}${fy}`; } }))}</div>`;
