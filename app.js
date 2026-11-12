@@ -4,7 +4,7 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '3.4.2';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const APP_VERSION = '3.4.3';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
 const LATEST_SCRIPT = 30;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
@@ -1045,7 +1045,7 @@ function rangePts(pts) {
 
 function holdingRows(list, money) {
   return list.map(x => `<div class="row${x.form ? ' link' : ''}"${x.form ? ` data-form="${x.form}" data-arg="${esc(x.arg)}"` : ''}>
-    <div class="main"><div class="t1">${esc(x.title)}</div><div class="t2">${x.sub}</div></div>
+    <div class="main"><div class="t1">${esc(x.title)}</div><div class="t2${x.wrap ? ' wrap' : ''}">${x.sub}</div></div>
     <div class="r"><div class="t1">${money(x.value)}</div><div class="t2 ${cls(x.pct)}">${pct(x.pct)}</div></div></div>`).join('');
 }
 
@@ -1070,6 +1070,8 @@ function mergedLabel(x) {
   x.merged.filter(p => p.qty > 0).forEach(p => { const n = p.owner || (/ 定期$/.test(p.label) ? '定期定額' : p.group); g[n] = (g[n] || 0) + (p.qty || 0); });
   return Object.keys(g).map(n => (hidden ? n : `${n} ${dec(g[n], Number.isInteger(g[n]) ? 0 : 2)} 股`)).join('＋');
 }
+// 合併列的說明比較長，放不下就換行：每個帳戶一段，只在段和段中間換行（不會把「1,514 股」拆開）
+const nbParts = parts => parts.map(p => `<span class="nb">${p}</span>`).join('<wbr>');
 // priceForm：點持股可以打開的表單（台股：更新現價），回傳 [表單, 參數] 或 null
 // between：放在「個股報酬率」和「持股明細」中間的內容（持股比重）
 // assets：總資產（台幣）；rate：這頁幣別換台幣的匯率（台股 1、美股用美金匯率）
@@ -1091,7 +1093,9 @@ function holdingsSection(id, all, filter, segId, money, priceFmt, priceForm, bet
     ${chart(id, el => divergingChart(el, list.map(x => ({ label: x.label, pct: x.pct,
       html: tr('帳戶', esc(groupLabel(x))) + tr('股數', qty(x.qty)) + tr('均價／現價', hidden ? MASK : priceFmt(x.avg) + '／' + priceFmt(x.price)) + tr('現值', money(x.value)) + tr('損益', money === ntd ? signedNtd(x.pl) : signedUsd(x.pl)) }))))}</div>
   ${between}<div class="sec">持股明細</div><div class="list">${holdingRows(list.slice().sort((a, b) => b.value - a.value).map(x => ({
-    title: x.label, value: x.value, pct: x.pct, sub: `${esc(groupLabel(x))}${x.merged ? '' : '・' + qty(x.qty) + ' 股'}・均價 ${hidden ? MASK : priceFmt(x.avg)}${x.manual ? '・現價手動' : ''}`,
+    title: x.label, value: x.value, pct: x.pct, wrap: !!x.merged,
+    sub: x.merged ? nbParts(mergedLabel(x).split('＋').map((p, i) => (i ? '＋' : '') + esc(p)).concat(['・均價 ' + (hidden ? MASK : priceFmt(x.avg)) + (x.manual ? '・現價手動' : '')]))
+      : `${esc(groupLabel(x))}・${qty(x.qty)} 股・均價 ${hidden ? MASK : priceFmt(x.avg)}${x.manual ? '・現價手動' : ''}`,
     form: priceForm && priceForm(x) ? priceForm(x)[0] : null, arg: priceForm && priceForm(x) ? priceForm(x)[1] : null })), money)}</div>`;
 }
 
