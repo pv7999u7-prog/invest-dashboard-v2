@@ -4,8 +4,8 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '3.4.3';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
-const LATEST_SCRIPT = 30;   // 最新 Code.gs 的 SCRIPT_VERSION
+const APP_VERSION = '3.5.0';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const LATEST_SCRIPT = 31;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
 
@@ -624,6 +624,9 @@ function combineTw(d) {
 let state = { cfg: null, raw: null, updated: '', data: null, status: 'idle', error: '', lastFetch: 0, seq: 0, timing: {}, writing: false };
 const LIVE_STALE_MS = 2 * 60000;   // 即時股價超過這麼久沒更新，讀到資料後再另外要求抓一次
 
+// 保單資料是另外讀的（state.raw._policy）：一般更新換掉 state.raw 時要留著
+function keepPolicy(raw) { if (raw && state.raw && state.raw._policy && !raw._policy) raw._policy = state.raw._policy; return raw; }
+
 // 送到 Apps Script；順便記下這次花了多久（設定頁會顯示，用來看慢在哪裡）
 async function post(body, kind) {
   const t0 = Date.now();
@@ -656,7 +659,7 @@ async function refresh() {
     if (!j.ok) throw new Error(j.error === 'unauthorized' ? '密碼不對' : (j.error || '讀取失敗'));
     // 更新途中做了寫入：這次讀到的可能是寫入前的舊資料，丟掉（寫入完成時會帶回最新資料）
     if (seq !== state.seq) { if (state.status === 'busy') setStatus(state.data ? 'ok' : 'idle'); return; }
-    state.raw = j.data; state.updated = j.updated; state.data = parseAll(j.data); state.lastFetch = Date.now();
+    state.raw = keepPolicy(j.data); state.updated = j.updated; state.data = parseAll(j.data); state.lastFetch = Date.now();
     await persist();
     setStatus('ok');
     render();
@@ -679,7 +682,7 @@ async function refreshLivePrices() {
   try {
     const j = await post({ live: true }, '更新股價');
     if (j.ok && seq === state.seq && !lock.locked) {
-      state.raw = j.data; state.updated = j.updated; state.data = parseAll(j.data); state.lastFetch = Date.now();
+      state.raw = keepPolicy(j.data); state.updated = j.updated; state.data = parseAll(j.data); state.lastFetch = Date.now();
       await persist();
       state.liveBusy = false;
       setStatus('ok');
@@ -1372,13 +1375,14 @@ function pagePlan(d) {
 }
 
 function pageExpense(d) {
+  if (expTab === 'policy') return pagePolicy();
   const e = d.expense;
-  if (!e) return '<div class="empty">找不到固定支出的資料</div>';
+  if (!e) return head('固定支出') + expSeg() + '<div class="empty">找不到固定支出的資料</div>';
   const months = Array.from({ length: 12 }, (_, i) => e.months.find(m => m.month === i + 1) || { month: i + 1, total: 0, items: [] });
   const curM = new Date().getMonth() + 1;
   const next = [0, 1, 2].map(k => months[(curM - 1 + k) % 12]);
   const diff = Math.abs(e.monthsTotal - e.annual) > 1;
-  let h = `${head('固定支出')}
+  let h = `${head('固定支出')}${expSeg()}
   <div class="card hero"><div class="lbl">${esc(e.title || '年度總支出')}</div><div class="big">${ntd(e.annual)}</div>
     <div class="meta">平均每月 ${ntd(e.annual / 12)}${diff ? '・每月明細合計 ' + ntd(e.monthsTotal) : ''}</div></div>
   <div class="tiles">

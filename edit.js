@@ -24,7 +24,7 @@ async function send(action, payload) {
   const j = await post({ action, payload }, '寫入');
   state.seq++;
   if (!j.ok) throw new Error(j.error === 'unauthorized' ? '密碼不對' : (j.error || '寫入失敗'));
-  state.raw = j.data; state.updated = j.updated; state.data = parseAll(j.data); state.lastFetch = Date.now();
+  state.raw = keepPolicy(j.data); state.updated = j.updated; state.data = parseAll(j.data); state.lastFetch = Date.now();
   await persist();
   setStatus('ok');
   return j.message || '已寫入試算表';
@@ -88,9 +88,9 @@ function openSheet(spec) {
     setStatus(state.status);
     toast(`「${spec.title}」寫入中…`, false, true);
     try {
-      const msg = await send(req[0], req[1]);
+      const msg = await (spec.send || send)(req[0], req[1]);
       state.writing = false;
-      o.remove(); setStatus(state.status); render(); toast('✓ ' + msg, true);
+      o.remove(); setStatus(state.status); render(); toast('✓ ' + msg, !spec.noUndo);
     } catch (e) {
       state.writing = false;
       const net = e.message === 'Failed to fetch' || e.name === 'TypeError';
@@ -620,4 +620,5 @@ function bindEdit() {
   if (seg) seg.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; ledgerKind = b.dataset.k; render(); });
   const ub = $('#undoBtn');
   if (ub) ub.addEventListener('click', () => doUndo(false));
+  bindPolicy();
 }

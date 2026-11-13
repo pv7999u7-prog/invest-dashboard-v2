@@ -8,7 +8,7 @@
 const KEY = '請改成你自己的密碼';
 
 // 程式碼版本（App 設定頁會顯示，用來確認部署的是不是最新版；這行不用改）
-const SCRIPT_VERSION = 30;
+const SCRIPT_VERSION = 31;
 
 // 要讀的工作表與範圍（試算表版面有大改時，才需要調整這裡）
 const RANGES = {
@@ -43,6 +43,8 @@ function doPost(e) {
     return json({ ok: false, error: 'unauthorized' });
   }
   MS = { t0: Date.now() };
+  // 人壽保單（另一份試算表）：只讀寫保單，不讀投資的資料
+  if (body.policy || body.policyAction) return policyRequest(body);
   ensureTrigger();
   try { ensureLiveTrigger(); } catch (err) {}
   // 即時價會讓整份試算表重算，很花時間：寫入時不抓（背景每 10 分鐘會抓）；
@@ -1622,4 +1624,122 @@ function now() {
 
 function json(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}
+
+/* ================================================================
+   人壽保單：資料在另一份試算表（例如雲端硬碟裡的「王家保單」），App「固定支出 → 人壽保單」讀寫它。
+   那份試算表的 ID 存在指令碼屬性 POLICY_ID（第一次在 App 貼上網址就會記下來），不寫在程式碼裡。
+   分頁：人壽保單（每張保單一列）、保障與理賠（每個險種一列）、繳費日期（每張保單一列）、理賠總表（只讀）。
+   欄位用第一列的標題找，不靠第幾欄；App 只有打開保單頁時才讀，平常更新不會多花時間。
+   保單的修改不走「復原上一步」（那個只管這份試算表）；寫入前會確認那一列還是同一張保單。
+   ================================================================ */
+const POLICY_TABS = { list: '人壽保單', cover: '保障與理賠', pay: '繳費日期', sum: '理賠總表' };
+// 保單號碼只留英數、去掉開頭的 0（「全球人壽 0027108250」和 27108250 算同一張）
+const policyNo = v => String(v == null ? '' : v).replace(/[^0-9A-Za-z]/g, '').replace(/^0+/, '');
+// 一段文字裡（例如繳費日期的「遠雄 1020210385」）有沒有這個保單號碼
+const policyIn = (text, no) => String(text == null ? '' : text).split(/[^0-9A-Za-z]+/).some(t => t && policyNo(t) === policyNo(no));
+
+function policyBook() {
+  const id = PropertiesService.getScriptProperties().getProperty('POLICY_ID');
+  if (!id) return null;
+  try { return SpreadsheetApp.openById(id); }
+  catch (err) {
+    if (/permission|授權|authoriz/i.test(String(err.message || err))) throw new Error('Apps Script 還沒有權限開啟保單試算表：請到 Apps Script 編輯器選 authorizePolicy 按「執行」並允許，再重新部署一次');
+    throw new Error('打不開保單試算表：' + String(err.message || err));
+  }
+}
+// 在 Apps Script 編輯器手動執行一次，用來取得開啟另一份試算表的權限
+function authorizePolicy() { const b = policyBook(); return b ? b.getName() : '尚未連結保單試算表'; }
+
+function policyRead() {
+  const ss = policyBook();
+  if (!ss) return { linked: false };
+  const out = { linked: true, url: ss.getUrl(), title: ss.getName(), at: now() };
+  Object.keys(POLICY_TABS).forEach(k => {
+    const s = ss.getSheetByName(POLICY_TABS[k]), rows = s ? s.getDataRange().getDisplayValues() : [];
+    let last = rows.length;
+    while (last > 0 && rows[last - 1].every(v => v === '')) last--;
+    out[k] = rows.slice(0, last);
+  });
+  return out;
+}
+
+// 寫一列裡的幾個欄位：values = { 標題: 新內容 }。原本是數字的格子，新內容像數字就寫數字（保留千分位格式）
+function policyWrite(s, row, values, skip) {
+  const head = s.getRange(1, 1, 1, s.getLastColumn()).getDisplayValues()[0].map(h => String(h).trim());
+  Object.keys(values).forEach(h => {
+    if (skip.indexOf(h) >= 0) return;
+    const c = head.indexOf(h) + 1;
+    if (!c) throw new Error(`「${s.getName()}」找不到「${h}」這一欄`);
+    const cell = s.getRange(row, c), v = String(values[h] == null ? '' : values[h]).trim();
+    cell.setValue(/^-?[\d,]+(\.\d+)?$/.test(v) && (typeof cell.getValue() === 'number' || /保費|金額/.test(h)) ? Number(v.replace(/,/g, '')) : v);
+  });
+}
+
+const POLICY_ACTIONS = {
+  // 連結保單試算表：貼網址或 ID
+  link(p) {
+    const m = String(p.url || '').match(/\/d\/([A-Za-z0-9_-]{20,})/) || String(p.url || '').trim().match(/^([A-Za-z0-9_-]{20,})$/);
+    if (!m) throw new Error('請貼上保單試算表的網址');
+    let ss;
+    try { ss = SpreadsheetApp.openById(m[1]); }
+    catch (err) { throw new Error(/permission|授權|authoriz/i.test(String(err.message || err)) ? 'Apps Script 還沒有權限開啟別的試算表：請到 Apps Script 編輯器選 authorizePolicy 按「執行」並允許，再重新部署一次' : '打不開這份試算表，請確認網址和權限'); }
+    if (!ss.getSheetByName(POLICY_TABS.list)) throw new Error(`這份試算表沒有「${POLICY_TABS.list}」分頁`);
+    PropertiesService.getScriptProperties().setProperty('POLICY_ID', m[1]);
+    return `已連結「${ss.getName()}」`;
+  },
+
+  // 修改一列：tab 'list'（人壽保單）或 'cover'（保障與理賠）；row 列號、no 保單號碼、name 險種（cover 用）是用來確認還是同一列
+  edit(p) {
+    const ss = policyBook();
+    if (!ss) throw new Error('還沒有連結保單試算表');
+    if (p.tab !== 'list' && p.tab !== 'cover') throw new Error('不認得的分頁');
+    const s = ss.getSheetByName(POLICY_TABS[p.tab]), row = num(p.row), values = p.values || {};
+    if (!s || !(row >= 2)) throw new Error('找不到這一列');
+    if (!Object.keys(values).length) throw new Error('沒有要修改的內容');
+    const head = s.getRange(1, 1, 1, s.getLastColumn()).getDisplayValues()[0].map(h => String(h).trim());
+    const cur = s.getRange(row, 1, 1, head.length).getDisplayValues()[0], at = h => String(cur[head.indexOf(h)] || '').trim();
+    if (!policyNo(p.no) || policyNo(at('保單號碼')) !== policyNo(p.no) || (p.tab === 'cover' && at('險種') !== String(p.name || '').trim())) {
+      throw new Error('這一列在試算表上已經變動，請按「重新整理」後再試');
+    }
+    policyWrite(s, row, values, ['被保險人', '保險公司', '保單號碼']);
+    // 繳費日、保費、扣款方式有改：繳費日期分頁同一張保單的那一列也一起改
+    if (p.tab === 'list') {
+      const pay = ss.getSheetByName(POLICY_TABS.pay), sync = {};
+      if (values['每年繳費日'] != null) {
+        sync['日期'] = values['每年繳費日'];
+        const mm = String(values['每年繳費日']).match(/^\s*(\d{1,2})\s*[\/月]/);
+        if (mm) sync['月份'] = Number(mm[1]) + '月';
+      }
+      if (values['年繳保費'] != null) sync['金額'] = values['年繳保費'];
+      if (values['繳費方式'] != null) sync['扣款方式'] = values['繳費方式'];
+      if (pay && Object.keys(sync).length) {
+        const g = pay.getDataRange().getDisplayValues(), ph = g[0].map(h => String(h).trim()), ic = ph.indexOf('項目');
+        const r = ic < 0 ? -1 : g.findIndex((x, i) => i > 0 && policyIn(x[ic], p.no));
+        if (r > 0) { Object.keys(sync).forEach(h => { if (ph.indexOf(h) < 0) delete sync[h]; }); policyWrite(pay, r + 1, sync, []); }
+      }
+    }
+    return p.tab === 'list' ? '已更新保單' : `已更新「${String(p.name || '').trim()}」`;
+  }
+};
+
+// 保單的讀寫：不讀投資的資料，回得比較快
+function policyRequest(body) {
+  try {
+    let message = '';
+    if (body.policyAction) {
+      const lock = LockService.getScriptLock();
+      lock.waitLock(20000);
+      try {
+        const fn = POLICY_ACTIONS[body.policyAction];
+        if (!fn) throw new Error('不認得的動作：' + body.policyAction);
+        message = fn(body.payload || {});
+        SpreadsheetApp.flush();
+        log('policy.' + body.policyAction, body.payload);
+      } finally { lock.releaseLock(); }
+    }
+    return json({ ok: true, message, policy: policyRead(), ms: msOut() });
+  } catch (err) {
+    return json({ ok: false, error: String(err.message || err) });
+  }
 }

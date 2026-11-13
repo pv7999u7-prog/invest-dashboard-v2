@@ -144,6 +144,14 @@ main { max-width: 760px; margin: 0 auto; padding: 0 16px; }
 .row .t2 { font-size: 13px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row .t2.wrap { white-space: normal; overflow: visible; line-height: 1.45; }
 .nb { white-space: nowrap; }
+.ptext { margin: 4px 0 10px; font-size: 14.5px; line-height: 1.6; color: var(--text-primary); }
+.ben { margin: 10px 0 0; padding-left: 18px; font-size: 14px; line-height: 1.6; color: var(--text-secondary); }
+.ben li + li { margin-top: 2px; }
+.kv.pol { align-items: flex-start; }
+.kv.pol span:first-child { flex: 0 0 40%; }
+.kv.pol span:last-child { font-weight: 500; line-height: 1.5; }
+.card.link { cursor: pointer; }
+a.act { text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
 .row .r { text-align: right; font-variant-numeric: tabular-nums; }
 .row .r .t1 { font-weight: 600; }
 .row .r .t2 { font-weight: 600; }
@@ -311,6 +319,7 @@ main.pulling { transition: none; }
 
 <script src="lock.js"></script>
 <script src="edit.js"></script>
+<script src="policy.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
