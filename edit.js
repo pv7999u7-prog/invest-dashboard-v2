@@ -348,17 +348,19 @@ function formHouse(name) {
 }
 
 /* ---------- 7. 里程碑 ---------- */
-function formMilestone(row) {
-  const m = row ? ed().milestones.find(x => x.row === Number(row)) : null;
+// arg：「life:列號」或「invest:列號」，新增時列號是空的
+function formMilestone(arg) {
+  const [kind, row] = String(arg || 'invest:').split(':'), life = kind === 'life';
+  const m = row ? (life ? ed().lifeMilestones || [] : ed().milestones).find(x => x.row === Number(row)) : null;
   const d = new Date(), ph = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
   openSheet({
-    title: m ? '編輯里程碑' : '新增里程碑',
+    title: (m ? '編輯' : '新增') + (life ? '人生里程碑' : '投資里程碑'),
     body: fText('date', '日期', m ? m.date : ph, '例如 20261105') + fArea('text', '內容', m ? m.text : ''),
     submit(f) {
       if (!val(f, 'date') || !val(f, 'text')) throw new Error('日期和內容都要填');
-      return ['milestone', { op: m ? 'set' : 'add', row: m && m.row, date: val(f, 'date'), text: val(f, 'text') }];
+      return ['milestone', { kind, op: m ? 'set' : 'add', row: m && m.row, date: val(f, 'date'), text: val(f, 'text') }];
     },
-    extra: m ? [{ label: '刪除這個里程碑', run: () => (confirm('確定要刪除這個里程碑？') ? ['milestone', { op: 'del', row: m.row }] : null) }] : []
+    extra: m ? [{ label: '刪除這個里程碑', run: () => (confirm('確定要刪除這個里程碑？') ? ['milestone', { kind, op: 'del', row: m.row }] : null) }] : []
   });
 }
 

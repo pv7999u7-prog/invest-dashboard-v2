@@ -8,7 +8,7 @@
 const KEY = '請改成你自己的密碼';
 
 // 程式碼版本（App 設定頁會顯示，用來確認部署的是不是最新版；這行不用改）
-const SCRIPT_VERSION = 33;
+const SCRIPT_VERSION = 34;
 
 // 要讀的工作表與範圍（試算表版面有大改時，才需要調整這裡）
 const RANGES = {
@@ -21,6 +21,7 @@ const RANGES = {
   kidsTw:    ['橙&澈 定期定額台股', 'A1:J80'],
   plan:      ['Plan', 'A1:I40'],
   milestone: ['Milestone', 'A1:B200'],
+  lifeMs:    ['人生里程碑', 'A1:B200'],
   expense:   ['固定支出', 'A1:L60'],
   house:     ['House', 'A1:L10'],
   bb:        ['BB', 'A1:AD60'],
@@ -28,6 +29,11 @@ const RANGES = {
 };
 
 const LOG_SHEET = 'App 紀錄';
+const LIFE_SHEET = '人生里程碑';   // 和 Milestone 分頁同樣格式：A 日期（文字）B 內容
+function lifeSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  return ss.getSheetByName(LIFE_SHEET) || ss.insertSheet(LIFE_SHEET);
+}
 const BROKERS = { CUBE: 3, Firstrade: 4 };   // 美股分頁：券商 → 摘要列（C 欄是現金）
 const CRYPTO = '幣 ';                          // 加密貨幣分頁（名稱後面有一個空白）
 const CRYPTO_CASH = ['USDT', 'Binance'];        // 加密貨幣的閒置現金：Binance 上的 USDT
@@ -154,6 +160,9 @@ function editInfo() {
   info.expense = expenseItems();
   info.milestones = sh('Milestone').getRange('A1:B200').getDisplayValues()
     .map((r, i) => ({ row: i + 1, date: r[0], text: r[1] })).filter(m => m.date || m.text);
+  const life = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(LIFE_SHEET);
+  info.lifeMilestones = life ? sh(LIFE_SHEET).getRange('A1:B200').getDisplayValues()
+    .map((r, i) => ({ row: i + 1, date: r[0], text: r[1] })).filter(m => m.date || m.text) : [];
   info.plan = planInfo();
   info.loans = loanRows();
   info.career = careerInfo();
@@ -324,9 +333,9 @@ const ACTIONS = {
     return `已記錄加密貨幣${sign > 0 ? '轉入' : '轉出'} ${usdt} USDT`;
   },
 
-  // 里程碑：op 'add'（加在最後）、'set'（改）、'del'（刪除）
+  // 里程碑：op 'add'（加在最後）、'set'（改）、'del'（刪除）；kind 'life' 是人生里程碑，其他是投資里程碑（Milestone 分頁）
   milestone(p) {
-    const s = sh('Milestone');
+    const s = p.kind === 'life' ? lifeSheet() : sh('Milestone');
     if (p.op === 'add') {
       const vals = s.getRange('A1:B300').getValues();
       let r = vals.length; while (r > 0 && vals[r - 1][0] === '' && vals[r - 1][1] === '') r--;

@@ -4,8 +4,8 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '3.6.5';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
-const LATEST_SCRIPT = 33;   // 最新 Code.gs 的 SCRIPT_VERSION
+const APP_VERSION = '3.7.0';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const LATEST_SCRIPT = 34;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
 
@@ -510,7 +510,7 @@ function parseAll(raw) {
   const d = {
     total: safe(parseTotal, raw.total), tw: safe(parseTw, raw.tw), us: safe(parseUs, raw.us),
     crypto: safe(parseCrypto, raw.crypto), myDca: safe(parseMyDca, raw.myDca), kidsUs: safe(parseKidsUs, raw.kidsUs),
-    kidsTw: safe(parseKidsTw, raw.kidsTw), plan: safe(parsePlan, raw.plan), milestone: safe(parseMilestone, raw.milestone),
+    kidsTw: safe(parseKidsTw, raw.kidsTw), plan: safe(parsePlan, raw.plan), milestone: safe(parseMilestone, raw.milestone), lifeMs: safe(parseMilestone, raw.lifeMs),
     expense: safe(parseExpense, raw.expense), house: safe(parseHouse, raw.house),
     career: raw.bb ? safe(parseCareer, raw.bb) : null,
     ledger: safe(parseLedger, raw)
@@ -1374,7 +1374,7 @@ const MORE = [
   { id: 'expense', title: '固定支出', sub: '每月與年度支出', icon: '▤', color: '--s2' },
   { id: 'retire', title: '退休金', sub: '勞保＋勞退試算', icon: '☂', color: '--s4' },
   { id: 'house', title: '房產', sub: '購入價與估計現值', icon: '⌂', color: '--s6' },
-  { id: 'milestone', title: '里程碑', sub: '重要資金動作', icon: '⚑', color: '--s7' },
+  { id: 'milestone', title: '里程碑', sub: '人生大事與投資資金動作', icon: '⚑', color: '--s7' },
   { id: 'career', title: '職涯與薪資', sub: '年資、職位、薪水與分紅', icon: '▲', color: '--s4' },
   { id: 'ledger', title: '明細與復原', sub: '修改、刪除資金異動與交易；復原上一步', icon: '☰', color: '--s8' },
   { id: 'settings', title: '設定', sub: '資料來源與密碼', icon: '⚙', color: '--axis' }
@@ -1684,11 +1684,16 @@ function sortMilestones(list) {
     .sort((a, b) => a.k - b.k || a.i - b.i).map(x => x.m);
 }
 
+// 里程碑分兩個分頁：人生（「人生里程碑」分頁，Apps Script 第 34 版起）、投資（原本的 Milestone 分頁）
+let msTab = 'life';
 function pageMilestone(d) {
+  const life = msTab === 'life', e = ed();
+  const seg = `<div class="seg" id="msSeg"><button data-k="life" class="${life ? 'on' : ''}">人生里程碑</button><button data-k="invest" class="${life ? '' : 'on'}">投資里程碑</button></div>`;
+  if (life && scriptVersion() < 34) return `${head('里程碑')}${seg}<div class="card"><p class="cap" style="margin:0">人生里程碑需要 Apps Script 第 34 版，請先更新 Apps Script。</p></div>`;
   // 有 Apps Script 的編輯資訊時用它（帶列號，點了可以編輯）；否則用一般讀到的資料
-  const e = ed(), list = sortMilestones(e ? e.milestones : (d.milestone || []));
-  return `${head('里程碑', [['＋ 新增', 'milestone']])}${e ? '<p class="hint" style="margin:-6px 0 10px">點項目可以修改或刪除</p>' : ''}
-  <div class="card"><ul class="tl">${list.slice().reverse().map(m => `<li${e ? ` class="link" data-form="milestone" data-arg="${m.row}"` : ''}><div class="d">${esc(m.date)}</div><div class="x">${esc(m.text)}</div></li>`).join('')}</ul></div>`;
+  const list = sortMilestones(e ? (life ? e.lifeMilestones || [] : e.milestones) : ((life ? d.lifeMs : d.milestone) || []));
+  return `${head('里程碑', [['＋ 新增', 'milestone', msTab + ':']])}${seg}${e ? '<p class="hint" style="margin:-2px 4px 10px">點項目可以修改或刪除</p>' : ''}
+  <div class="card">${list.length ? `<ul class="tl">${list.slice().reverse().map(m => `<li${e ? ` class="link" data-form="milestone" data-arg="${msTab}:${m.row}"` : ''}><div class="d">${esc(m.date)}</div><div class="x">${esc(m.text)}</div></li>`).join('')}</ul>` : '<p class="cap" style="margin:0">還沒有里程碑，按右上角「＋ 新增」</p>'}</div>`;
 }
 
 // 即時股價的狀態（Apps Script 第 23 版起）：上次抓的時間、美股的 Finnhub 金鑰有沒有設定
@@ -1774,6 +1779,8 @@ function render() {
 }
 
 function bindPage() {
+  const ms = $('#msSeg');
+  if (ms) ms.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; msTab = b.dataset.k; render(); window.scrollTo(0, 0); });
   bindRetire();
   document.querySelectorAll('[data-go]').forEach(el => el.addEventListener('click', () => { location.hash = el.dataset.go; }));
   const rs = $('#rangeSeg');
