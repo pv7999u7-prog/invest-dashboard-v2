@@ -8,7 +8,7 @@
 const KEY = '請改成你自己的密碼';
 
 // 程式碼版本（App 設定頁會顯示，用來確認部署的是不是最新版；這行不用改）
-const SCRIPT_VERSION = 34;
+const SCRIPT_VERSION = 35;
 
 // 要讀的工作表與範圍（試算表版面有大改時，才需要調整這裡）
 const RANGES = {
@@ -1657,11 +1657,15 @@ function json(obj) {
    欄位用第一列的標題找，不靠第幾欄；App 只有打開保單頁時才讀，平常更新不會多花時間。
    保單的修改不走「復原上一步」（那個只管這份試算表）；寫入前會確認那一列還是同一張保單。
    ================================================================ */
-const POLICY_TABS = { list: '人壽保單', cover: '保障與理賠', pay: '繳費日期', sum: '理賠總表' };
+// acc 意外險：一年一約，每年續保新增一列（保單年度、續保自＝前一年的保單號碼）
+const POLICY_TABS = { list: '人壽保單', cover: '保障與理賠', pay: '繳費日期', sum: '理賠總表', acc: '意外險' };
 // 保單號碼只留英數、去掉開頭的 0（「全球人壽 0027108250」和 27108250 算同一張）
 const policyNo = v => String(v == null ? '' : v).replace(/[^0-9A-Za-z]/g, '').replace(/^0+/, '');
+// 比對用的號碼：整個號碼，和最後一段（「0123-15ABC00001」在繳費日期寫成「15ABC00001」也算同一張）
+const policyKeys = no => [policyNo(no), policyNo(String(no == null ? '' : no).split(/[^0-9A-Za-z]+/).filter(Boolean).pop())].filter(Boolean);
+const policyTok = (t, no) => !!t && policyKeys(no).indexOf(policyNo(t)) >= 0;
 // 一段文字裡（例如繳費日期的「遠雄 1020210385」）有沒有這個保單號碼
-const policyIn = (text, no) => String(text == null ? '' : text).split(/[^0-9A-Za-z]+/).some(t => t && policyNo(t) === policyNo(no));
+const policyIn = (text, no) => String(text == null ? '' : text).split(/[^0-9A-Za-z]+/).some(t => policyTok(t, no));
 
 function policyBook() {
   const id = PropertiesService.getScriptProperties().getProperty('POLICY_ID');
@@ -1717,7 +1721,7 @@ const POLICY_ACTIONS = {
   edit(p) {
     const ss = policyBook();
     if (!ss) throw new Error('還沒有連結保單試算表');
-    if (p.tab !== 'list' && p.tab !== 'cover') throw new Error('不認得的分頁');
+    if (p.tab !== 'list' && p.tab !== 'cover' && p.tab !== 'acc') throw new Error('不認得的分頁');
     const s = ss.getSheetByName(POLICY_TABS[p.tab]), row = num(p.row), values = p.values || {};
     if (!s || !(row >= 2)) throw new Error('找不到這一列');
     if (!Object.keys(values).length) throw new Error('沒有要修改的內容');
@@ -1728,24 +1732,79 @@ const POLICY_ACTIONS = {
     }
     policyWrite(s, row, values, ['被保險人', '保險公司', '保單號碼']);
     // 繳費日、保費、扣款方式有改：繳費日期分頁同一張保單的那一列也一起改
-    if (p.tab === 'list') {
-      const pay = ss.getSheetByName(POLICY_TABS.pay), sync = {};
-      if (values['每年繳費日'] != null) {
-        sync['日期'] = values['每年繳費日'];
-        const mm = String(values['每年繳費日']).match(/^\s*(\d{1,2})\s*[\/月]/);
-        if (mm) sync['月份'] = Number(mm[1]) + '月';
-      }
-      if (values['年繳保費'] != null) sync['金額'] = values['年繳保費'];
-      if (values['繳費方式'] != null) sync['扣款方式'] = values['繳費方式'];
-      if (pay && Object.keys(sync).length) {
-        const g = pay.getDataRange().getDisplayValues(), ph = g[0].map(h => String(h).trim()), ic = ph.indexOf('項目');
-        const r = ic < 0 ? -1 : g.findIndex((x, i) => i > 0 && policyIn(x[ic], p.no));
-        if (r > 0) { Object.keys(sync).forEach(h => { if (ph.indexOf(h) < 0) delete sync[h]; }); policyWrite(pay, r + 1, sync, []); }
-      }
-    }
-    return p.tab === 'list' ? '已更新保單' : `已更新「${String(p.name || '').trim()}」`;
+    if (p.tab === 'list' || p.tab === 'acc') policyPaySync(ss, p.no, values, null);
+    if (p.tab === 'acc' && values['年繳保費'] != null) accExpenseSync(at('被保險人'), values['年繳保費']);
+    return p.tab === 'cover' ? `已更新「${String(p.name || '').trim()}」` : '已更新保單';
+  },
+
+  // 意外險續保：照前一年那一列（row、no 確認）新增下一年的一列；繳費日期分頁那一列換成新保單；固定支出的金額一起改
+  accRenew(p) {
+    const ss = policyBook();
+    if (!ss) throw new Error('還沒有連結保單試算表');
+    const s = ss.getSheetByName(POLICY_TABS.acc), row = num(p.row), values = p.values || {};
+    if (!s || !(row >= 2)) throw new Error('找不到前一年的意外險');
+    const head = s.getRange(1, 1, 1, s.getLastColumn()).getDisplayValues()[0].map(h => String(h).trim());
+    const cur = s.getRange(row, 1, 1, head.length).getDisplayValues()[0], at = h => String(cur[head.indexOf(h)] || '').trim();
+    if (!policyNo(p.no) || policyNo(at('保單號碼')) !== policyNo(p.no)) throw new Error('這一列在試算表上已經變動，請按「重新整理」後再試');
+    const newNo = String(values['保單號碼'] || '').trim();
+    if (!policyNo(newNo)) throw new Error('請填新的保單號碼');
+    if (policyNo(newNo) === policyNo(p.no)) throw new Error('新的保單號碼和前一年一樣');
+    const all = s.getDataRange().getDisplayValues(), ic = head.indexOf('保單號碼');
+    if (all.some((r, i) => i > 0 && policyNo(r[ic]) === policyNo(newNo))) throw new Error('這個保單號碼已經登記過了');
+    // 新的一列：沒填的欄位沿用前一年（被保險人、保險公司一定沿用），續保自＝前一年的保單號碼
+    const out = {};
+    head.forEach(h => { if (h) out[h] = at(h); });
+    Object.keys(values).forEach(h => { if (h in out && ['被保險人', '保險公司'].indexOf(h) < 0) out[h] = String(values[h] == null ? '' : values[h]).trim(); });
+    if ('續保自' in out) out['續保自'] = at('保單號碼');
+    const at2 = s.getLastRow() + 1;
+    s.getRange(row, 1, 1, head.length).copyFormatToRange(s, 1, head.length, at2, at2);
+    head.forEach((h, c) => {
+      if (!h) return;
+      const v = out[h];
+      s.getRange(at2, c + 1).setValue(/^-?[\d,]+(\.\d+)?$/.test(v) && /保費|年度/.test(h) ? Number(v.replace(/,/g, '')) : v);
+    });
+    policyPaySync(ss, p.no, out, newNo);
+    accExpenseSync(out['被保險人'], out['年繳保費']);
+    return `已新增 ${out['保單年度'] || ''} 年度意外險`;
   }
 };
+
+// 繳費日期分頁：找到「項目」裡有這張保單號碼的那一列，同步日期／月份／金額／扣款方式；newNo 有給就把項目裡的號碼換成新的
+function policyPaySync(ss, no, values, newNo) {
+  const pay = ss.getSheetByName(POLICY_TABS.pay), sync = {};
+  if (!pay) return;
+  if (values['每年繳費日'] != null) {
+    sync['日期'] = values['每年繳費日'];
+    const mm = String(values['每年繳費日']).match(/^\s*(\d{1,2})\s*[\/月]/);
+    if (mm) sync['月份'] = Number(mm[1]) + '月';
+  }
+  if (values['年繳保費'] != null) sync['金額'] = values['年繳保費'];
+  if (values['繳費方式'] != null) sync['扣款方式'] = values['繳費方式'];
+  const g = pay.getDataRange().getDisplayValues(), ph = g[0].map(h => String(h).trim()), ic = ph.indexOf('項目');
+  const r = ic < 0 ? -1 : g.findIndex((x, i) => i > 0 && policyIn(x[ic], no));
+  if (r <= 0) return;
+  if (newNo) {
+    const old = String(g[r][ic]), toks = old.split(/([^0-9A-Za-z]+)/);
+    sync['項目'] = toks.map(t => (policyTok(t, no) ? String(newNo).replace(/^0*\d+-/, '') : t)).join('');
+  }
+  Object.keys(sync).forEach(h => { if (ph.indexOf(h) < 0) delete sync[h]; });
+  if (Object.keys(sync).length) policyWrite(pay, r + 1, sync, []);
+}
+
+// 固定支出（這份投資試算表）：名稱有「意外」又有被保險人名字（取最後兩個字）的項目，金額改成新保費
+function accExpenseSync(person, amount) {
+  const amt = num(String(amount || '').replace(/,/g, '')), nm = String(person || '').trim().slice(-2);
+  if (!amt || !nm) return;
+  let s;
+  try { s = sh('固定支出'); } catch (e) { return; }
+  EXP_BLOCKS.forEach(b => {
+    const rg = s.getRange(b.from, 1, b.to - b.from + 1, 12), v = rg.getValues();
+    v.forEach((r, i) => b.months.forEach((m, k) => {
+      const name = String(r[k * 2] || '');
+      if (/意外/.test(name) && name.indexOf(nm) >= 0) s.getRange(b.from + i, k * 2 + 2).setValue(amt);
+    }));
+  });
+}
 
 // 保單的讀寫：不讀投資的資料，回得比較快
 function policyRequest(body) {
