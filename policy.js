@@ -116,6 +116,7 @@ function pagePolicy() {
 
   const all = D.list.concat(D.accNow), total = all.reduce((t, p) => t + (p.premium || 0), 0);
   const sched = all.filter(p => p.next).sort((a, b) => a.next.date - b.next.date), nx = sched[0];
+  if (scriptVersion() < 35) h += `<p class="msg" style="margin:0 4px 10px">意外險和「續保下一年」需要 Apps Script 第 35 版，請先更新 Apps Script。</p>`;
   h += err + `<div class="card hero"><div class="lbl">全年保費</div><div class="big">${ntd(total)}</div>
     <div class="meta">${all.length} 張保單・${D.people.length} 人${nx ? `・下一筆 ${nx.next.month}/${nx.next.day}（${polDays(nx.next.days)}）` : ''}</div></div>`;
   h += `<div class="sec">繳費時程<em>從最近的開始</em></div><div class="list">${sched.map(p => `<div class="row link" data-pol="${polLink(p)}">
