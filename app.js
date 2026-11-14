@@ -4,7 +4,7 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '3.8.0';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const APP_VERSION = '3.8.1';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
 const LATEST_SCRIPT = 34;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
@@ -1368,6 +1368,7 @@ function bindRetire() {
 }
 
 const MORE = [
+  { id: 'dca', title: '定期定額', sub: '小孩帳戶與我的帳戶', icon: '↻', color: '--s3' },
   { id: 'plan', title: '長期計畫', sub: '目標與實際', icon: '◎', color: '--s1' },
   { id: 'expense', title: '固定支出', sub: '每月與年度支出', icon: '▤', color: '--s2' },
   { id: 'retire', title: '退休金', sub: '勞保＋勞退試算', icon: '☂', color: '--s4' },
@@ -1391,7 +1392,7 @@ function pageMore() {
     <div class="main"><div class="t1">${m.title}</div><div class="t2">${m.sub}</div></div><span class="chev">›</span></div>`).join('')}</div>`;
 }
 
-// 底部「定期定額」：左右兩個分頁，小孩帳戶／我的帳戶（舊的 #more/kids、#more/dca 會自動轉過來）
+// 更多 →「定期定額」：左右兩個分頁，小孩帳戶／我的帳戶（舊的 #more/kids 會自動轉過來）
 let dcaTab = 'kids';
 const dcaHead = () => head('定期定額', [['＋ 本月定期定額', 'dca']]) +
   `<div class="seg" id="dcaSeg"><button data-k="kids" class="${dcaTab === 'kids' ? 'on' : ''}">小孩帳戶</button><button data-k="my" class="${dcaTab === 'my' ? 'on' : ''}">我的帳戶</button></div>`;
@@ -1756,11 +1757,11 @@ function pageSettings(first) {
    ================================================================ */
 function route() {
   const r = (location.hash || '#overview').slice(1);
-  // 小孩帳戶、我的定期定額以前在「更多」底下，舊連結轉到底部的「定期定額」
-  if (r === 'more/kids' || r === 'more/dca') { dcaTab = r === 'more/kids' ? 'kids' : 'my'; history.replaceState(null, '', '#dca'); return 'dca'; }
+  // 小孩帳戶以前是獨立一頁，舊連結轉到「定期定額」的小孩帳戶分頁
+  if (r === 'more/kids' || r === 'dca') { if (r === 'more/kids') dcaTab = 'kids'; history.replaceState(null, '', '#more/dca'); return 'more/dca'; }
   return r;
 }
-const PAGES = { overview: pageOverview, us: pageUs, tw: pageTw, crypto: pageCrypto, dca: pageDcaTab, more: pageMore, 'more/plan': pagePlan, 'more/expense': pageExpense,
+const PAGES = { overview: pageOverview, us: pageUs, tw: pageTw, crypto: pageCrypto, more: pageMore, 'more/dca': pageDcaTab, 'more/plan': pagePlan, 'more/expense': pageExpense,
   'more/house': pageHouse, 'more/milestone': pageMilestone, 'more/retire': pageRetire, 'more/career': pageCareer, 'more/ledger': pageLedger, 'more/settings': () => pageSettings(false) };
 
 function render() {
