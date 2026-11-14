@@ -8,7 +8,7 @@
 const KEY = '請改成你自己的密碼';
 
 // 程式碼版本（App 設定頁會顯示，用來確認部署的是不是最新版；這行不用改）
-const SCRIPT_VERSION = 31;
+const SCRIPT_VERSION = 32;
 
 // 要讀的工作表與範圍（試算表版面有大改時，才需要調整這裡）
 const RANGES = {
@@ -23,7 +23,8 @@ const RANGES = {
   milestone: ['Milestone', 'A1:B200'],
   expense:   ['固定支出', 'A1:L60'],
   house:     ['House', 'A1:L10'],
-  bb:        ['BB', 'A1:AD60']
+  bb:        ['BB', 'A1:AD60'],
+  retire:    ['退休金', 'A1:F120']
 };
 
 const LOG_SHEET = 'App 紀錄';

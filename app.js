@@ -4,8 +4,8 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '3.5.0';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
-const LATEST_SCRIPT = 31;   // 最新 Code.gs 的 SCRIPT_VERSION
+const APP_VERSION = '3.6.0';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const LATEST_SCRIPT = 32;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
 
@@ -1267,11 +1267,53 @@ function pageLedger(d) {
     <div class="r" style="font-size:14px;font-weight:600">${l.r}</div></div>`; }).join('')}</div>`;
 }
 
+/* ---------- 退休金（勞保＋勞退試算）：試算表「退休金」分頁，App 只顯示 ----------
+   分頁的寫法：用空白列分段；每段第一列只有 A 欄是這段的標題；
+   接下來有兩欄以上的是表格（第一列是欄名），只有 A 欄的是條列或說明文字。
+   App 不認得任何特定的字，分頁裡加段落、改數字，下拉更新後就會跟著變。 */
+function parseRetire(rows) {
+  const blocks = [];
+  let cur = null;
+  (rows || []).forEach(r => {
+    const cells = r.map(v => String(v == null ? '' : v).trim());
+    while (cells.length && cells[cells.length - 1] === '') cells.pop();
+    if (!cells.length) { cur = null; return; }
+    if (!cur) { cur = { title: '', rows: [], notes: [] }; blocks.push(cur); if (cells.length === 1) { cur.title = cells[0]; return; } }
+    if (cells.length === 1) cur.notes.push(cells[0]); else cur.rows.push(cells);
+  });
+  return blocks;
+}
+// 隱藏數字時：把內容裡的數字遮掉（年齡、年份也會遮，反正是隱私模式）
+const retireText = t => (hidden ? esc(t).replace(/\d[\d,.]*/g, '••') : esc(t));
+function pageRetire() {
+  const blocks = parseRetire(state.raw && state.raw.retire);
+  if (!blocks.length) return `${head('退休金')}<div class="card"><p class="cap" style="margin:0">${scriptVersion() < 32 ? '這一頁需要 Apps Script 第 32 版，請先更新 Apps Script。' : '試算表裡找不到「退休金」分頁，或分頁是空的。'}</p></div>`;
+  let h = head('退休金');
+  blocks.forEach((b, i) => {
+    // 第一段是整頁的標題和資料日期；最後只有一句話的段落當成頁尾說明
+    if (i === 0 && !b.rows.length) { h += `<p class="hint" style="margin:-6px 4px 12px">${esc(b.title)}${b.notes.length ? '<br>' + b.notes.map(esc).join('<br>') : ''}</p>`; return; }
+    if (!b.rows.length && !b.notes.length) { h += `<p class="hint" style="margin:14px 4px 0">${retireText(b.title)}</p>`; return; }
+    let body = '';
+    if (b.rows.length) {
+      const [hd, ...rs] = b.rows, cols = Math.max(...b.rows.map(r => r.length));
+      body += cols === 2
+        ? rs.map(r => `<div class="kv pol"><span>${esc(r[0])}</span><span>${retireText(r[1] || '')}</span></div>`).join('')
+        : `<div class="rtw"><table class="rt"><thead><tr>${hd.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${rs.map(r =>
+            `<tr${/^合計/.test(r[0]) ? ' class="sum"' : ''}>${Array.from({ length: cols }, (_, k) => `<td>${k ? retireText(r[k] || '') : esc(r[k] || '')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+    }
+    if (b.notes.length) body += b.rows.length ? b.notes.map(n => `<p class="cap" style="margin:10px 0 0">${retireText(n)}</p>`).join('')
+      : `<ul class="ben" style="margin-top:2px;color:var(--text-primary)">${b.notes.map(n => `<li>${retireText(n)}</li>`).join('')}</ul>`;
+    h += `<div class="card"><h3>${esc(b.title)}</h3>${body}</div>`;
+  });
+  return h;
+}
+
 const MORE = [
   { id: 'kids', title: '小孩帳戶', sub: '小孩的美股與台股', icon: '★', color: '--s5' },
   { id: 'dca', title: '我的定期定額', sub: '台幣扣款 QQQ／0050', icon: '↻', color: '--s3' },
   { id: 'plan', title: '長期計畫', sub: '目標與實際', icon: '◎', color: '--s1' },
   { id: 'expense', title: '固定支出', sub: '每月與年度支出', icon: '▤', color: '--s2' },
+  { id: 'retire', title: '退休金', sub: '勞保＋勞退試算', icon: '☂', color: '--s4' },
   { id: 'house', title: '房產', sub: '購入價與估計現值', icon: '⌂', color: '--s6' },
   { id: 'milestone', title: '里程碑', sub: '重要資金動作', icon: '⚑', color: '--s7' },
   { id: 'career', title: '職涯與薪資', sub: '年資、職位、薪水與分紅', icon: '▲', color: '--s4' },
@@ -1644,7 +1686,7 @@ function pageSettings(first) {
 function route() { return (location.hash || '#overview').slice(1); }
 const PAGES = { overview: pageOverview, us: pageUs, tw: pageTw, crypto: pageCrypto, more: pageMore,
   'more/kids': pageKids, 'more/dca': pageDca, 'more/plan': pagePlan, 'more/expense': pageExpense,
-  'more/house': pageHouse, 'more/milestone': pageMilestone, 'more/career': pageCareer, 'more/ledger': pageLedger, 'more/settings': () => pageSettings(false) };
+  'more/house': pageHouse, 'more/milestone': pageMilestone, 'more/retire': pageRetire, 'more/career': pageCareer, 'more/ledger': pageLedger, 'more/settings': () => pageSettings(false) };
 
 function render() {
   const r = route();
