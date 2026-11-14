@@ -4,7 +4,7 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '3.6.3';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const APP_VERSION = '3.6.4';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
 const LATEST_SCRIPT = 33;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
@@ -1287,8 +1287,8 @@ function parseRetire(rows) {
 const retireCanEdit = (b, r) => !!ed() && scriptVersion() >= 33 && r.length === 2 && (/可以改/.test(b.title) || /可以改/.test(r[0]));
 // 隱藏數字時：把內容裡的數字遮掉（年齡、年份也會遮，反正是隱私模式）
 const retireText = t => (hidden ? esc(t).replace(/\d[\d,.]*/g, '••') : esc(t));
-// 版面（由上到下）：各退休年齡的結論（點一列看那個年齡的明細）→ 明細 → 重點提醒 → 調整試算（退休年齡＋試算參數）
-// → 個人資料 → 假設與公式（收合）。段落用試算表裡的標題認；認不得的段落照原樣排在後面，不會不見。
+// 版面（由上到下）：個人資料 → 各退休年齡的結論（點一列看那個年齡的明細）→ 明細 → 重點提醒
+// → 調整試算（退休年齡＋試算參數）→ 假設與公式（收合）。段落用試算表裡的標題認；認不得的段落照原樣排在後面，不會不見。
 let retireSel = 0;   // 結論裡選的是第幾列（0 是自訂年齡）
 const retireCut = t => String(t).replace(/（[^）]*可以改[^）]*）/, '');
 function retireKv(b, r) {
@@ -1321,6 +1321,8 @@ function pageRetire() {
   const assume = take(x => /假設/.test(x.title)), formula = take(x => /公式/.test(x.title));
   const foot = take(x => !x.rows.length && !x.notes.length);
   let h = head('退休金');
+  // 個人資料放最上面
+  if (person) h += `<div class="card"><h3>${esc(person.title)}</h3><p class="cap">年齡、月薪、年資會自動更新</p>${person.rows.slice(1).map(r => retireKv(person, r)).join('')}${person.notes.map(n => `<p class="cap" style="margin:10px 0 0">${retireText(n)}</p>`).join('')}</div>`;
 
   // 結論：每個退休年齡一列，點了下面換成那個年齡的明細
   if (summary) {
@@ -1346,7 +1348,6 @@ function pageRetire() {
     h += `<div class="card"><h3>調整試算</h3><p class="cap">${retireCanEdit(edits[0], edits[0].rows[1] || []) ? '點藍色的數字可以改，改完上面的結果會重算，也會寫回試算表' : '要改請到試算表的「退休金」分頁'}</p>` +
       edits.map((b, i) => (i ? `<div class="grp" style="margin-top:14px">${esc(retireCut(b.title))}</div>` : '') + b.rows.slice(1).map(r => retireKv(b, r)).join('')).join('') + '</div>';
   }
-  if (person) h += `<div class="card"><h3>${esc(person.title)}</h3><p class="cap">年齡、月薪、年資會自動更新</p>${person.rows.slice(1).map(r => retireKv(person, r)).join('')}${person.notes.map(n => `<p class="cap" style="margin:10px 0 0">${retireText(n)}</p>`).join('')}</div>`;
   blocks.forEach((x, k) => { if (!used.has(k)) h += retireGeneric(x); });
   // 假設與公式：平常收起來
   if (assume || formula) {
