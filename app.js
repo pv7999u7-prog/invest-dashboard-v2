@@ -4,7 +4,7 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '3.7.1';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const APP_VERSION = '3.8.0';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
 const LATEST_SCRIPT = 34;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
@@ -1368,8 +1368,6 @@ function bindRetire() {
 }
 
 const MORE = [
-  { id: 'kids', title: '小孩帳戶', sub: '小孩的美股與台股', icon: '★', color: '--s5' },
-  { id: 'dca', title: '我的定期定額', sub: '台幣扣款 QQQ／0050', icon: '↻', color: '--s3' },
   { id: 'plan', title: '長期計畫', sub: '目標與實際', icon: '◎', color: '--s1' },
   { id: 'expense', title: '固定支出', sub: '每月與年度支出', icon: '▤', color: '--s2' },
   { id: 'retire', title: '退休金', sub: '勞保＋勞退試算', icon: '☂', color: '--s4' },
@@ -1393,10 +1391,16 @@ function pageMore() {
     <div class="main"><div class="t1">${m.title}</div><div class="t2">${m.sub}</div></div><span class="chev">›</span></div>`).join('')}</div>`;
 }
 
+// 底部「定期定額」：左右兩個分頁，小孩帳戶／我的帳戶（舊的 #more/kids、#more/dca 會自動轉過來）
+let dcaTab = 'kids';
+const dcaHead = () => head('定期定額', [['＋ 本月定期定額', 'dca']]) +
+  `<div class="seg" id="dcaSeg"><button data-k="kids" class="${dcaTab === 'kids' ? 'on' : ''}">小孩帳戶</button><button data-k="my" class="${dcaTab === 'my' ? 'on' : ''}">我的帳戶</button></div>`;
+const pageDcaTab = d => (dcaTab === 'my' ? pageDca(d) : pageKids(d));
+
 function pageKids(d) {
   const u = d.kidsUs, w = d.kidsTw;
   const names = [...new Set([...(u ? u.kids.map(k => k.name) : []), ...(w ? w.kids.map(k => k.name) : [])])];
-  let h = head('小孩帳戶', [['＋ 本月定期定額', 'dca']]);
+  let h = dcaHead();
   const totalVal = (u && u.total ? u.total.valNTD || 0 : 0) + (w && w.total ? w.total.value || 0 : 0);
   const totalInv = (u && u.total ? u.total.costNTD || 0 : 0) + (w && w.total ? w.total.inv || 0 : 0);
   h += `<div class="card hero"><div class="lbl">兩人合計現值</div><div class="big">${ntd(totalVal)}</div>
@@ -1431,9 +1435,9 @@ function pageKids(d) {
 
 function pageDca(d) {
   const m = d.myDca;
-  if (!m) return '<div class="empty">找不到定期定額的資料</div>';
+  if (!m) return dcaHead() + '<div class="empty">找不到定期定額的資料</div>';
   const tot = m.rows.find(r => r.broker === 'Total');
-  let h = head('我的定期定額', [['＋ 本月定期定額', 'dca']]);
+  let h = dcaHead();
   if (tot) h += `<div class="card hero"><div class="lbl">總現值</div><div class="big">${ntd(tot.valNTD)}</div>
     <div class="meta">投入約 ${ntd(tot.invNTD)}・${usd(tot.invUSD)}</div><div style="margin-top:10px"><span class="pill ${cls(tot.pct)}">${pct(tot.pct)}</span></div></div>`;
   const plans = m.plans.filter(p => p.monthly);
@@ -1750,9 +1754,13 @@ function pageSettings(first) {
 /* ================================================================
    路由與畫面
    ================================================================ */
-function route() { return (location.hash || '#overview').slice(1); }
-const PAGES = { overview: pageOverview, us: pageUs, tw: pageTw, crypto: pageCrypto, more: pageMore,
-  'more/kids': pageKids, 'more/dca': pageDca, 'more/plan': pagePlan, 'more/expense': pageExpense,
+function route() {
+  const r = (location.hash || '#overview').slice(1);
+  // 小孩帳戶、我的定期定額以前在「更多」底下，舊連結轉到底部的「定期定額」
+  if (r === 'more/kids' || r === 'more/dca') { dcaTab = r === 'more/kids' ? 'kids' : 'my'; history.replaceState(null, '', '#dca'); return 'dca'; }
+  return r;
+}
+const PAGES = { overview: pageOverview, us: pageUs, tw: pageTw, crypto: pageCrypto, dca: pageDcaTab, more: pageMore, 'more/plan': pagePlan, 'more/expense': pageExpense,
   'more/house': pageHouse, 'more/milestone': pageMilestone, 'more/retire': pageRetire, 'more/career': pageCareer, 'more/ledger': pageLedger, 'more/settings': () => pageSettings(false) };
 
 function render() {
@@ -1782,6 +1790,8 @@ function render() {
 }
 
 function bindPage() {
+  const ds = $('#dcaSeg');
+  if (ds) ds.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; dcaTab = b.dataset.k; render(); window.scrollTo(0, 0); });
   const ms = $('#msSeg');
   if (ms) ms.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; msTab = b.dataset.k; render(); window.scrollTo(0, 0); });
   bindRetire();
