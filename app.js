@@ -4,7 +4,7 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '3.7.0';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const APP_VERSION = '3.7.1';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
 const LATEST_SCRIPT = 34;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
@@ -1692,8 +1692,11 @@ function pageMilestone(d) {
   if (life && scriptVersion() < 34) return `${head('里程碑')}${seg}<div class="card"><p class="cap" style="margin:0">人生里程碑需要 Apps Script 第 34 版，請先更新 Apps Script。</p></div>`;
   // 有 Apps Script 的編輯資訊時用它（帶列號，點了可以編輯）；否則用一般讀到的資料
   const list = sortMilestones(e ? (life ? e.lifeMilestones || [] : e.milestones) : ((life ? d.lifeMs : d.milestone) || []));
+  // 人生里程碑：日期旁邊寫當年幾歲（用長期計畫的年份與年齡推出生年，和 Plan、BB 的算法一樣：年份 − 出生年）
+  const py = d.plan && d.plan.years.find(y => y.year && y.age), born = py ? py.year - py.age : null;
+  const ageOf = m => { const y = Math.floor(milestoneKey(m.date) / 10000); return life && born && y > born ? `<span class="ag">${hidden ? '••' : y - born} 歲</span>` : ''; };
   return `${head('里程碑', [['＋ 新增', 'milestone', msTab + ':']])}${seg}${e ? '<p class="hint" style="margin:-2px 4px 10px">點項目可以修改或刪除</p>' : ''}
-  <div class="card">${list.length ? `<ul class="tl">${list.slice().reverse().map(m => `<li${e ? ` class="link" data-form="milestone" data-arg="${msTab}:${m.row}"` : ''}><div class="d">${esc(m.date)}</div><div class="x">${esc(m.text)}</div></li>`).join('')}</ul>` : '<p class="cap" style="margin:0">還沒有里程碑，按右上角「＋ 新增」</p>'}</div>`;
+  <div class="card">${list.length ? `<ul class="tl">${list.slice().reverse().map(m => `<li${e ? ` class="link" data-form="milestone" data-arg="${msTab}:${m.row}"` : ''}><div class="d">${esc(m.date)}${ageOf(m)}</div><div class="x">${esc(m.text)}</div></li>`).join('')}</ul>` : '<p class="cap" style="margin:0">還沒有里程碑，按右上角「＋ 新增」</p>'}</div>`;
 }
 
 // 即時股價的狀態（Apps Script 第 23 版起）：上次抓的時間、美股的 Finnhub 金鑰有沒有設定
