@@ -4,8 +4,8 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '3.6.0';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
-const LATEST_SCRIPT = 32;   // 最新 Code.gs 的 SCRIPT_VERSION
+const APP_VERSION = '3.6.1';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const LATEST_SCRIPT = 33;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
 
@@ -1270,19 +1270,21 @@ function pageLedger(d) {
 /* ---------- 退休金（勞保＋勞退試算）：試算表「退休金」分頁，App 只顯示 ----------
    分頁的寫法：用空白列分段；每段第一列只有 A 欄是這段的標題；
    接下來有兩欄以上的是表格（第一列是欄名），只有 A 欄的是條列或說明文字。
-   App 不認得任何特定的字，分頁裡加段落、改數字，下拉更新後就會跟著變。 */
+   App 不認得任何特定的字，分頁裡加段落、改數字，下拉更新後就會跟著變。
+   標題或項目名稱裡有「可以改」的兩欄表格，數值可以在 App 點一下修改（寫回試算表，試算表重算後帶回新結果）。 */
 function parseRetire(rows) {
   const blocks = [];
   let cur = null;
-  (rows || []).forEach(r => {
+  (rows || []).forEach((r, i) => {
     const cells = r.map(v => String(v == null ? '' : v).trim());
     while (cells.length && cells[cells.length - 1] === '') cells.pop();
     if (!cells.length) { cur = null; return; }
     if (!cur) { cur = { title: '', rows: [], notes: [] }; blocks.push(cur); if (cells.length === 1) { cur.title = cells[0]; return; } }
-    if (cells.length === 1) cur.notes.push(cells[0]); else cur.rows.push(cells);
+    if (cells.length === 1) cur.notes.push(cells[0]); else { cells.row = i + 1; cur.rows.push(cells); }
   });
   return blocks;
 }
+const retireCanEdit = (b, r) => !!ed() && scriptVersion() >= 33 && r.length === 2 && (/可以改/.test(b.title) || /可以改/.test(r[0]));
 // 隱藏數字時：把內容裡的數字遮掉（年齡、年份也會遮，反正是隱私模式）
 const retireText = t => (hidden ? esc(t).replace(/\d[\d,.]*/g, '••') : esc(t));
 function pageRetire() {
@@ -1297,7 +1299,9 @@ function pageRetire() {
     if (b.rows.length) {
       const [hd, ...rs] = b.rows, cols = Math.max(...b.rows.map(r => r.length));
       body += cols === 2
-        ? rs.map(r => `<div class="kv pol"><span>${esc(r[0])}</span><span>${retireText(r[1] || '')}</span></div>`).join('')
+        ? rs.map(r => (retireCanEdit(b, r)
+            ? `<div class="kv pol link" data-form="retire" data-arg="${r.row}"><span>${esc(r[0].replace(/（[^）]*可以改[^）]*）/, ''))}</span><span class="edv">${retireText(r[1] || '')} <i>✎</i></span></div>`
+            : `<div class="kv pol"><span>${esc(r[0])}</span><span>${retireText(r[1] || '')}</span></div>`)).join('')
         : `<div class="rtw"><table class="rt"><thead><tr>${hd.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${rs.map(r =>
             `<tr${/^合計/.test(r[0]) ? ' class="sum"' : ''}>${Array.from({ length: cols }, (_, k) => `<td>${k ? retireText(r[k] || '') : esc(r[k] || '')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
     }

@@ -8,7 +8,7 @@
 const KEY = '請改成你自己的密碼';
 
 // 程式碼版本（App 設定頁會顯示，用來確認部署的是不是最新版；這行不用改）
-const SCRIPT_VERSION = 32;
+const SCRIPT_VERSION = 33;
 
 // 要讀的工作表與範圍（試算表版面有大改時，才需要調整這裡）
 const RANGES = {
@@ -547,6 +547,20 @@ const ACTIONS = {
     if (v <= 0) throw new Error('現價要大於 0');
     put(cell, v);
     return `已更新 ${h.name} 現價 ${v}`;
+  },
+
+  // 退休金分頁的自訂退休年齡與試算參數：只能改 B 欄不是公式的格子，寫成文字（試算用 VALUE() 讀）；
+  // label 是 A 欄的名稱，用來確認還是同一列。寫完試算表會自己重算，回傳的資料就是新的結果
+  retire(p) {
+    const s = sh('退休金'), row = num(p.row), v = String(p.value == null ? '' : p.value).trim();
+    if (!(row >= 2)) throw new Error('找不到這一列');
+    if (v === '') throw new Error('請填數值');
+    if (!/^-?[\d,]+(\.\d+)?%?$/.test(v)) throw new Error('請填數字（可以有千分位或 %）');
+    const a = String(s.getRange(row, 1).getDisplayValues()[0][0]).trim(), cell = s.getRange(row, 2);
+    if (a !== String(p.label || '').trim()) throw new Error('這一列在試算表上已經變動，請下拉更新後再試');
+    if (cell.getFormula()) throw new Error('這一格是自動計算的，不能直接改');
+    put(fmtCell(cell, '@'), v);
+    return `已更新「${a.replace(/（[^）]*可以改[^）]*）/, '')}」`;
   },
 
   // 閒置現金直接改成某個數字（例如收到股利、手續費和券商對帳）：id 見 cashAccounts

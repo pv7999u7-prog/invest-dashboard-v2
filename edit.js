@@ -598,8 +598,29 @@ function formCash(id) {
   });
 }
 
+/* ---------- 退休金：自訂退休年齡、試算參數 ---------- */
+function formRetire(rowNo) {
+  let hit = null;
+  parseRetire(state.raw && state.raw.retire).forEach(b => b.rows.forEach(r => { if (r.row === Number(rowNo) && retireCanEdit(b, r)) hit = r; }));
+  if (!hit) return;
+  const name = hit[0].replace(/（[^）]*可以改[^）]*）/, ''), isAge = /年齡/.test(name), isPct = /%$/.test(hit[1]);
+  openSheet({
+    title: name,
+    body: `<p class="hint" style="margin-top:0">改完會寫回試算表的「退休金」分頁，下面的試算結果跟著重算。${isPct ? '百分比請保留 %，例如 6%。' : ''}</p>` + fText('v', '數值', hit[1], hit[1]),
+    submit(f) {
+      let v = val(f, 'v');
+      if (!v) throw new Error('請填數值');
+      if (isPct && /^[\d.]+$/.test(v)) v += '%';
+      if (!/^-?[\d,]+(\.\d+)?%?$/.test(v)) throw new Error('請填數字');
+      if (isAge) { const n = Number(v.replace(/,/g, '')); if (!Number.isInteger(n) || n < 40 || n > 75) throw new Error('退休年齡請填 40～75 的整數'); }
+      if (v === hit[1]) throw new Error('沒有改動');
+      return ['retire', { row: hit.row, label: hit[0], value: v }];
+    }
+  });
+}
+
 /* ---------- 綁定 ---------- */
-const FORMS = { cost: formCost, trade: formTrade, twPrice: formTwPrice, cryptoFlow: formCryptoFlow, dca: formDca, plan: formPlan, expense: formExpense, loan: formLoan, house: formHouse, milestone: formMilestone, career: formCareer, careerEvent: formCareerEvent, ledger: formLedger, cash: formCash };
+const FORMS = { cost: formCost, trade: formTrade, twPrice: formTwPrice, cryptoFlow: formCryptoFlow, dca: formDca, plan: formPlan, expense: formExpense, loan: formLoan, house: formHouse, milestone: formMilestone, career: formCareer, careerEvent: formCareerEvent, ledger: formLedger, cash: formCash, retire: formRetire };
 
 function bindEdit() {
   // ＋ 開頭的按鈕是「新增」：加號換成金色
