@@ -4,7 +4,7 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '3.6.4';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const APP_VERSION = '3.6.5';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
 const LATEST_SCRIPT = 33;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
@@ -1287,9 +1287,10 @@ function parseRetire(rows) {
 const retireCanEdit = (b, r) => !!ed() && scriptVersion() >= 33 && r.length === 2 && (/可以改/.test(b.title) || /可以改/.test(r[0]));
 // 隱藏數字時：把內容裡的數字遮掉（年齡、年份也會遮，反正是隱私模式）
 const retireText = t => (hidden ? esc(t).replace(/\d[\d,.]*/g, '••') : esc(t));
-// 版面（由上到下）：個人資料 → 各退休年齡的結論（點一列看那個年齡的明細）→ 明細 → 重點提醒
-// → 調整試算（退休年齡＋試算參數）→ 假設與公式（收合）。段落用試算表裡的標題認；認不得的段落照原樣排在後面，不會不見。
-let retireSel = 0;   // 結論裡選的是第幾列（0 是自訂年齡）
+// 版面（由上到下）：個人資料 → 每個退休年齡一張明細（自訂、55、60、65）→ 調整試算（收合）
+// → 試算假設與計算公式（收合）→ 重點提醒。段落用試算表裡的標題認；認不得的段落照原樣排在後面，不會不見。
+// 自訂年齡那張的「自訂」是金色，點了會展開「調整試算」並捲過去。
+const retireOpen = { edit: false, info: false };   // 收合區塊目前有沒有打開（重畫後維持）
 const retireCut = t => String(t).replace(/（[^）]*可以改[^）]*）/, '');
 function retireKv(b, r) {
   return retireCanEdit(b, r)
@@ -1308,6 +1309,7 @@ function retireGeneric(b) {
     : `<ul class="ben rl">${b.notes.map(n => `<li>${retireText(n)}</li>`).join('')}</ul>`;
   return `<div class="card"><h3>${esc(retireCut(b.title))}</h3>${body}</div>`;
 }
+const retireFold = (key, title, body) => `<details class="card fold" data-rfold="${key}"${retireOpen[key] ? ' open' : ''}><summary><h3>${title}</h3><span class="chev">›</span></summary>${body}</details>`;
 function pageRetire() {
   const blocks = parseRetire(state.raw && state.raw.retire);
   if (!blocks.length) return `${head('退休金')}<div class="card"><p class="cap" style="margin:0">${scriptVersion() < 32 ? '這一頁需要 Apps Script 第 32 版，請先更新 Apps Script。' : '試算表裡找不到「退休金」分頁，或分頁是空的。'}</p></div>`;
@@ -1320,47 +1322,49 @@ function pageRetire() {
   const person = take(x => /個人資料/.test(x.title));
   const assume = take(x => /假設/.test(x.title)), formula = take(x => /公式/.test(x.title));
   const foot = take(x => !x.rows.length && !x.notes.length);
+  // 結論摘要第 i 列是「自訂」嗎（例如「50 歲（自訂）」）；明細表和結論列的順序一樣
+  const custom = i => !!(summary && summary.rows[i + 1] && /自訂/.test(summary.rows[i + 1][0]));
   let h = head('退休金');
-  // 個人資料放最上面
+
+  // 1. 個人資料
   if (person) h += `<div class="card"><h3>${esc(person.title)}</h3><p class="cap">年齡、月薪、年資會自動更新</p>${person.rows.slice(1).map(r => retireKv(person, r)).join('')}${person.notes.map(n => `<p class="cap" style="margin:10px 0 0">${retireText(n)}</p>`).join('')}</div>`;
 
-  // 結論：每個退休年齡一列，點了下面換成那個年齡的明細
-  if (summary) {
-    const rows = summary.rows.slice(1);
-    if (retireSel >= rows.length) retireSel = 0;
-    h += `<div class="sec" style="margin-top:4px">退休年齡比較<em>點一列看明細</em></div><div class="list rsum">${rows.map((r, i) => {
-      const m = String(r[0]).match(/^(\d+)\s*歲(.*)$/), tag = m ? m[2].replace(/[（）()]/g, '') : '';
-      return `<div class="row link${tag ? ' cus' : ''}${i === retireSel ? ' on' : ''}" data-rsel="${i}"><div class="age">${m ? `<b>${hidden ? '••' : m[1]}</b><small>歲${tag ? '・' + esc(tag) : ''}</small>` : esc(r[0])}</div>
-        <div class="main"><div class="rs"><span>一次領</span><span>${retireText((r[1] || '').replace(/^約\s*/, ''))}</span></div><div class="rs"><span>月領</span><span>${retireText((r[2] || '').replace(/^約\s*/, ''))}</span></div></div></div>`; }).join('')}</div>`;
-    if (summary.notes.length) h += summary.notes.map(n => `<p class="hint" style="margin:8px 4px 0">${retireText(n)}</p>`).join('');
-  }
-  // 選到的那個年齡：一次領、月領各一區，勞保／勞退／合計
-  const A = ages[summary ? retireSel : 0];
-  if (A) {
-    const hd = A.rows[0], rs = A.rows.slice(1), part = k => `<div class="grp" style="margin-top:${k === 1 ? 4 : 16}px">${esc(hd[k] || '')}</div>` +
+  // 2. 每個退休年齡一張：一次領、月領各列勞保、勞退、合計
+  ages.forEach((A, i) => {
+    const m = String(A.title).match(/^(\d+)\s*歲退休(?:（(.*)）)?/), hd = A.rows[0], rs = A.rows.slice(1);
+    const part = k => `<div class="grp" style="margin-top:${k === 1 ? 6 : 16}px">${esc(hd[k] || '')}</div>` +
       rs.map(r => `<div class="kv pol${/^合計/.test(r[0]) ? ' tot' : ''}"><span>${esc(r[0])}</span><span>${retireText(r[k] || '')}</span></div>`).join('');
-    h += `<div class="card" style="margin-top:14px"><h3>${retireText(A.title)}</h3>${part(1)}${hd.length > 2 ? part(2) : ''}</div>`;
-  }
-  ages.forEach((x, i) => { if (!summary && i > 0) h += retireGeneric(x); });
-  if (remind) h += `<div class="card"><h3>${esc(remind.title)}</h3><ol class="ben rl num">${remind.notes.map(n => `<li>${retireText(n)}</li>`).join('')}</ol></div>`;
-  // 調整試算：退休年齡和試算參數放一起
+    const tag = custom(i) ? `<button class="rcus" data-rjump="edit">自訂</button>` : '';
+    h += `<div class="card rage"><div class="rh"><div><b>${m ? (hidden ? '••' : m[1]) : ''}</b><span>${m ? '歲退休' : retireText(A.title)}</span>${tag}</div>${m && m[2] ? `<small>${retireText(m[2])}</small>` : ''}</div>
+      ${part(1)}${hd.length > 2 ? part(2) : ''}</div>`;
+  });
+  if (summary && summary.notes.length) h += summary.notes.map(n => `<p class="hint" style="margin:-4px 4px 14px">${retireText(n)}</p>`).join('');
+
+  // 3. 調整試算（收合）：退休年齡和試算參數
   if (edits.length) {
-    h += `<div class="card"><h3>調整試算</h3><p class="cap">${retireCanEdit(edits[0], edits[0].rows[1] || []) ? '點藍色的數字可以改，改完上面的結果會重算，也會寫回試算表' : '要改請到試算表的「退休金」分頁'}</p>` +
-      edits.map((b, i) => (i ? `<div class="grp" style="margin-top:14px">${esc(retireCut(b.title))}</div>` : '') + b.rows.slice(1).map(r => retireKv(b, r)).join('')).join('') + '</div>';
+    h += retireFold('edit', '調整試算', `<p class="cap" style="margin-top:8px">${retireCanEdit(edits[0], edits[0].rows[1] || []) ? '點藍色的數字可以改，改完上面的結果會重算，也會寫回試算表' : '要改請到試算表的「退休金」分頁'}</p>` +
+      edits.map((b, i) => (i ? `<div class="grp" style="margin-top:14px">${esc(retireCut(b.title))}</div>` : '') + b.rows.slice(1).map(r => retireKv(b, r)).join('')).join(''));
   }
-  blocks.forEach((x, k) => { if (!used.has(k)) h += retireGeneric(x); });
-  // 假設與公式：平常收起來
+  // 4. 試算假設與計算公式（收合）
   if (assume || formula) {
-    h += `<details class="card fold"><summary><h3>試算假設與計算公式</h3><span class="chev">›</span></summary>` +
-      [assume, formula].filter(Boolean).map(b => `<div class="grp" style="margin-top:12px">${esc(b.title)}</div><ul class="ben rl">${b.notes.map(n => `<li>${retireText(n)}</li>`).join('')}</ul>` +
-        b.rows.slice(1).map(r => retireKv(b, r)).join('')).join('') + '</details>';
+    h += retireFold('info', '試算假設與計算公式', [assume, formula].filter(Boolean).map(b => `<div class="grp" style="margin-top:12px">${esc(b.title)}</div><ul class="ben rl">${b.notes.map(n => `<li>${retireText(n)}</li>`).join('')}</ul>` +
+      b.rows.slice(1).map(r => retireKv(b, r)).join('')).join(''));
   }
+  // 5. 重點提醒
+  if (remind) h += `<div class="card"><h3>${esc(remind.title)}</h3><ol class="ben rl num">${remind.notes.map(n => `<li>${retireText(n)}</li>`).join('')}</ol></div>`;
+  blocks.forEach((x, k) => { if (!used.has(k)) h += retireGeneric(x); });
   const tail = [intro && intro.notes.join(' '), foot && foot.title].filter(Boolean);
   if (tail.length) h += tail.map(t => `<p class="hint" style="margin:12px 4px 0">${retireText(t)}</p>`).join('');
   return h;
 }
 function bindRetire() {
-  document.querySelectorAll('[data-rsel]').forEach(el => el.addEventListener('click', () => { retireSel = Number(el.dataset.rsel); const y = window.scrollY; render(); window.scrollTo(0, y); }));
+  document.querySelectorAll('[data-rfold]').forEach(el => el.addEventListener('toggle', () => { retireOpen[el.dataset.rfold] = el.open; }));
+  document.querySelectorAll('[data-rjump]').forEach(el => el.addEventListener('click', () => {
+    const d = document.querySelector(`[data-rfold="${el.dataset.rjump}"]`);
+    if (!d) return;
+    d.open = true; retireOpen[el.dataset.rjump] = true;
+    window.scrollTo(0, d.getBoundingClientRect().top + window.scrollY - 70);
+  }));
 }
 
 const MORE = [

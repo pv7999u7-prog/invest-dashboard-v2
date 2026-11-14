@@ -159,6 +159,15 @@ main { max-width: 760px; margin: 0 auto; padding: 0 16px; }
 ol.ben.num { padding-left: 22px; }
 .rsum .row { align-items: center; gap: 14px; padding: 12px 14px; }
 .rsum .row.on { background: rgba(124,193,255,0.10); box-shadow: inset 3px 0 0 var(--tint); }
+.rage .rh { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+.rage .rh > div { display: flex; align-items: baseline; gap: 4px; }
+.rage .rh b { font-size: 30px; font-weight: 750; line-height: 1; font-variant-numeric: tabular-nums; }
+.rage .rh span { font-size: 16px; font-weight: 650; }
+.rage .rh small { font-size: 12.5px; color: var(--text-secondary); }
+/* 「自訂」：和「＋ 成本變更」按鈕同一組金色 */
+.rcus { margin-left: 8px; align-self: center; font-size: 12.5px; font-weight: 700; color: #f5c04a; padding: 3px 10px; border-radius: 999px;
+  background: rgba(245,192,74,0.12); box-shadow: 0 0 0 1px rgba(245,192,74,.55) inset; }
+.rcus:active { background: rgba(245,192,74,0.26); }
 /* 自訂年齡那一列：和「＋ 成本變更」按鈕同一組金色 */
 .rsum .row.cus { background: rgba(245,192,74,0.12); box-shadow: 0 0 0 1px rgba(245,192,74,.55) inset; }
 .rsum .row.cus.on { background: rgba(245,192,74,0.20); box-shadow: inset 3px 0 0 #f5c04a, 0 0 0 1px rgba(245,192,74,.55) inset; }
