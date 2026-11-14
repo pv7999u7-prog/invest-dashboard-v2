@@ -4,7 +4,7 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '3.6.2';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const APP_VERSION = '3.6.3';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
 const LATEST_SCRIPT = 33;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
@@ -1328,7 +1328,7 @@ function pageRetire() {
     if (retireSel >= rows.length) retireSel = 0;
     h += `<div class="sec" style="margin-top:4px">退休年齡比較<em>點一列看明細</em></div><div class="list rsum">${rows.map((r, i) => {
       const m = String(r[0]).match(/^(\d+)\s*歲(.*)$/), tag = m ? m[2].replace(/[（）()]/g, '') : '';
-      return `<div class="row link${i === retireSel ? ' on' : ''}" data-rsel="${i}"><div class="age">${m ? `<b>${hidden ? '••' : m[1]}</b><small>歲${tag ? '・' + esc(tag) : ''}</small>` : esc(r[0])}</div>
+      return `<div class="row link${tag ? ' cus' : ''}${i === retireSel ? ' on' : ''}" data-rsel="${i}"><div class="age">${m ? `<b>${hidden ? '••' : m[1]}</b><small>歲${tag ? '・' + esc(tag) : ''}</small>` : esc(r[0])}</div>
         <div class="main"><div class="rs"><span>一次領</span><span>${retireText((r[1] || '').replace(/^約\s*/, ''))}</span></div><div class="rs"><span>月領</span><span>${retireText((r[2] || '').replace(/^約\s*/, ''))}</span></div></div></div>`; }).join('')}</div>`;
     if (summary.notes.length) h += summary.notes.map(n => `<p class="hint" style="margin:8px 4px 0">${retireText(n)}</p>`).join('');
   }
