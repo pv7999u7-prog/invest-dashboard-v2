@@ -4,8 +4,8 @@
 
 const LS = { cfg: 'inv2-cfg-v1', cache: 'inv2-cache-v1', hide: 'inv2-hide-v1' };   // 舊版 App 在同一個網域，key 要不同
 const AUTO_REFRESH_MIN = 5;   // App 從背景回到前景時，超過幾分鐘沒更新就重抓
-const APP_VERSION = '3.9.1';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
-const LATEST_SCRIPT = 35;   // 最新 Code.gs 的 SCRIPT_VERSION
+const APP_VERSION = '3.10.0';   // 顯示在設定頁，用來確認 iPhone 上是不是新版
+const LATEST_SCRIPT = 36;   // 最新 Code.gs 的 SCRIPT_VERSION
 // 目前部署的 Code.gs 是第幾版：舊版沒有版本號，用回傳的內容推斷
 const scriptVersion = () => { const r = state.raw; if (!r) return null; if (r._scriptVersion) return r._scriptVersion; return r.bb ? 3 : r._sheetUrl ? 2 : 1; };
 
@@ -625,7 +625,8 @@ let state = { cfg: null, raw: null, updated: '', data: null, status: 'idle', err
 const LIVE_STALE_MS = 2 * 60000;   // 即時股價超過這麼久沒更新，讀到資料後再另外要求抓一次
 
 // 保單資料是另外讀的（state.raw._policy）：一般更新換掉 state.raw 時要留著
-function keepPolicy(raw) { if (raw && state.raw && state.raw._policy && !raw._policy) raw._policy = state.raw._policy; return raw; }
+// 保單、0050 建議是另外讀的，一般更新回來的資料沒有它們：留著上次讀到的
+function keepPolicy(raw) { if (raw && state.raw) ['_policy', '_etf'].forEach(k => { if (state.raw[k] && !raw[k]) raw[k] = state.raw[k]; }); return raw; }
 
 // 送到 Apps Script；順便記下這次花了多久（設定頁會顯示，用來看慢在哪裡）
 async function post(body, kind) {
@@ -1369,6 +1370,7 @@ function bindRetire() {
 
 const MORE = [
   { id: 'dca', title: '定期定額', sub: '小孩帳戶與我的帳戶', icon: '↻', color: '--s3' },
+  { id: 'etf', title: '0050 長期投資', sub: '每日買點建議與資金', icon: '◆', color: '--s5' },
   { id: 'plan', title: '長期計畫', sub: '目標與實際', icon: '◎', color: '--s1' },
   { id: 'expense', title: '固定支出', sub: '每月與年度支出', icon: '▤', color: '--s2' },
   { id: 'retire', title: '退休金', sub: '勞保＋勞退試算', icon: '☂', color: '--s4' },
@@ -1757,12 +1759,14 @@ function pageSettings(first) {
    ================================================================ */
 function route() {
   const r = (location.hash || '#overview').slice(1);
+  // 0050 通知點進來：打開 0050 頁並跳出今日建議
+  if (r === 'etfpop') { etfS.pop = true; history.replaceState(null, '', '#more/etf'); return 'more/etf'; }
   // 小孩帳戶以前是獨立一頁，舊連結轉到「定期定額」的小孩帳戶分頁
   if (r === 'more/kids' || r === 'dca') { if (r === 'more/kids') dcaTab = 'kids'; history.replaceState(null, '', '#more/dca'); return 'more/dca'; }
   return r;
 }
 const PAGES = { overview: pageOverview, us: pageUs, tw: pageTw, crypto: pageCrypto, more: pageMore, 'more/dca': pageDcaTab, 'more/plan': pagePlan, 'more/expense': pageExpense,
-  'more/house': pageHouse, 'more/milestone': pageMilestone, 'more/retire': pageRetire, 'more/career': pageCareer, 'more/ledger': pageLedger, 'more/settings': () => pageSettings(false) };
+  'more/house': pageHouse, 'more/milestone': pageMilestone, 'more/retire': pageRetire, 'more/etf': pageEtf, 'more/career': pageCareer, 'more/ledger': pageLedger, 'more/settings': () => pageSettings(false) };
 
 function render() {
   const r = route();

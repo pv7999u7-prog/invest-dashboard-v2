@@ -1,8 +1,8 @@
 // 離線快取：只快取 App 本身的檔案；試算表資料（script.google.com）一律不經過快取
 // 改了程式後，把 VERSION 改一下，下次連網開啟時就會換成新版
 const PREFIX = 'inv2-';
-const VERSION = PREFIX + 'v64';
-const FILES = ['./', 'index.html', 'lock.js', 'app.js', 'edit.js', 'policy.js', 'manifest.webmanifest', 'icon-v9-180.png', 'icon-v9-192.png', 'icon-v9-512.png'];
+const VERSION = PREFIX + 'v65';
+const FILES = ['./', 'index.html', 'lock.js', 'app.js', 'edit.js', 'policy.js', 'etf-page.js', 'manifest.webmanifest', 'icon-v9-180.png', 'icon-v9-192.png', 'icon-v9-512.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));
@@ -28,4 +28,23 @@ self.addEventListener('fetch', e => {
       })
       .catch(() => caches.match(e.request, { ignoreSearch: true }))
   );
+});
+
+// 0050 每日建議的推播：Apps Script 每個開盤日早上送來；點通知打開 App 並跳出今日建議
+self.addEventListener('push', e => {
+  let m = {};
+  try { m = e.data ? e.data.json() : {}; } catch (err) { m = { body: e.data ? e.data.text() : '' }; }
+  e.waitUntil(self.registration.showNotification(m.title || '0050 今日建議', {
+    body: m.body || '打開看今天的建議', tag: m.tag || 'etf', data: { url: m.url || './#etfpop' },
+    icon: 'icon-v9-192.png', badge: 'icon-v9-192.png'
+  }));
+});
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const url = new URL((e.notification.data && e.notification.data.url) || './#etfpop', self.registration.scope).href;
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+    const c = list.find(x => x.url.startsWith(self.registration.scope));
+    if (c) { c.postMessage({ type: 'etfpop' }); return c.focus(); }
+    return self.clients.openWindow(url);
+  }));
 });

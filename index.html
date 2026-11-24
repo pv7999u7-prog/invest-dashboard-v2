@@ -164,6 +164,25 @@ ol.ben.num { padding-left: 22px; }
 .rage .rh b { font-size: 30px; font-weight: 750; line-height: 1; font-variant-numeric: tabular-nums; }
 .rage .rh span { font-size: 16px; font-weight: 650; }
 .rage .rh small { font-size: 12.5px; color: var(--text-secondary); }
+/* 0050 長期投資 */
+.pill.warn { background: rgba(245,192,74,0.12); color: #f5c04a; border-color: rgba(245,192,74,0.35); }
+.pill.mute { background: rgba(255,255,255,0.06); color: var(--text-secondary); border-color: rgba(255,255,255,0.12); }
+.etf-hero .etf-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.etf-hero .etf-date { font-size: 12.5px; color: var(--text-secondary); }
+.etf-hero .etf-title { font-size: 18px; font-weight: 700; line-height: 1.4; margin: 10px 0 2px; }
+.etf-hero .etf-amt { font-size: 32px; font-weight: 750; margin: 4px 0 2px; font-variant-numeric: tabular-nums; color: var(--good-text); }
+.etf-hero.up { box-shadow: 0 0 0 1px rgba(95,211,154,.35) inset; }
+.etf-hero.warn { box-shadow: 0 0 0 1px rgba(245,192,74,.35) inset; }
+.etf-hero .grp em, .card h3 .etf-sub { font-style: normal; font-weight: 500; font-size: 12px; color: var(--text-muted); margin-left: 6px; }
+.etf-sig { display: flex; gap: 10px; padding: 9px 0; border-top: 1px solid var(--sep); }
+.etf-sig:first-of-type { border-top: 0; }
+.etf-sig .dot { color: var(--text-muted); font-size: 14px; line-height: 1.5; }
+.etf-sig.on .dot, .etf-sig.on b { color: var(--good-text); }
+.etf-sig b { display: block; font-size: 15px; font-weight: 650; }
+.etf-sig small { display: block; font-size: 13px; color: var(--text-secondary); line-height: 1.5; }
+.etf-sig small.need { color: var(--text-muted); font-size: 12px; }
+.etf-note { display: block; font-size: 11.5px; font-weight: 500; color: var(--text-muted); }
+#etfPop .card { margin-bottom: 12px; }
 /* 「自訂」：和「＋ 成本變更」按鈕同一組金色 */
 .rcus { margin-left: 8px; align-self: center; font-size: 12.5px; font-weight: 700; color: #f5c04a; padding: 3px 10px; border-radius: 999px;
   background: rgba(245,192,74,0.12); box-shadow: 0 0 0 1px rgba(245,192,74,.55) inset; }
@@ -363,6 +382,7 @@ main.pulling { transition: none; }
 <script src="lock.js"></script>
 <script src="edit.js"></script>
 <script src="policy.js"></script>
+<script src="etf-page.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

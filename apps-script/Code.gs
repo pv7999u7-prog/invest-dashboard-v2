@@ -8,7 +8,7 @@
 const KEY = '請改成你自己的密碼';
 
 // 程式碼版本（App 設定頁會顯示，用來確認部署的是不是最新版；這行不用改）
-const SCRIPT_VERSION = 35;
+const SCRIPT_VERSION = 36;
 
 // 要讀的工作表與範圍（試算表版面有大改時，才需要調整這裡）
 const RANGES = {
@@ -52,6 +52,8 @@ function doPost(e) {
   MS = { t0: Date.now() };
   // 人壽保單（另一份試算表）：只讀寫保單，不讀投資的資料
   if (body.policy || body.policyAction) return policyRequest(body);
+  // 0050 長期投資：每日建議、設定、通知訂閱（不讀投資的資料）
+  if (body.etf || body.etfAction) return etfRequest(body);
   ensureTrigger();
   try { ensureLiveTrigger(); } catch (err) {}
   // 即時價會讓整份試算表重算，很花時間：寫入時不抓（背景每 10 分鐘會抓）；
@@ -607,7 +609,10 @@ function ensureLiveTrigger() {
   ScriptApp.newTrigger('liveJob').timeBased().everyMinutes(10).create();
   props.setProperty('trigger-live-v1', '1');
 }
-function liveJob() { refreshLive(true); }
+function liveJob() {
+  try { etfJob(false); } catch (err) {}   // 0050 每日建議：開盤日 8:25 後第一次跑時做
+  refreshLive(true);
+}
 
 function dailyJob() {
   const ss = SpreadsheetApp.getActiveSpreadsheet(), tz = ss.getSpreadsheetTimeZone();
@@ -1826,3 +1831,535 @@ function policyRequest(body) {
     return json({ ok: false, error: String(err.message || err) });
   }
 }
+
+// ===== 0050 長期投資（由 etf/build.py 從 etf/*.js 合併，要改請改 etf/ 裡的檔案）=====
+// ---- etf/engine.js ----
+// 0050 長期投資：每日建議的計算規則（純計算，不含任何個人資料；資料由呼叫的人傳進來）
+// 規則來自 2026-11 的回測討論：
+//   定期定額每月 5 號 2 萬永不停；每年單筆預算 30～50 萬，核心 60% 在 1 月投入，其餘是預備金；
+//   預備金只在四種訊號出現時加碼，每次 1 份＝預備金 ÷ 3，兩次至少隔 10 個交易日；
+//   只加碼不賣；預備金可滾到明年但最多一年份預算，超過的部分 12 月最後一個交易日投入。
+// 「實際投入」用試算表的紀錄算，所以沒照建議買（或買得比建議多）時，隔天的建議會跟著調整。
+
+const ETF_RULES = {
+  coreRatio: 0.6, units: 3, gapDays: 10, monthly: 20000, dcaDay: 5,
+  budgetMin: 300000, budgetMax: 500000, budgetDefault: 400000
+};
+
+// series: [{d:'YYYY-MM-DD', c:收盤}]，日期由舊到新
+function etfSma(a, n, i) { if (i < n - 1) return null; let s = 0; for (let k = i - n + 1; k <= i; k++) s += a[k]; return s / n; }
+// 美股的資料：取「日期早於台股今天」的最後幾筆（美股收盤在台灣的晚上）
+function etfBefore(series, day) { return (series || []).filter(x => x.d < day); }
+
+/**
+ * in = {
+ *   today: 'YYYY-MM-DD'（台北日期）,
+ *   holidays: ['YYYY-MM-DD'] 台股休市日（平日但不開盤；可省略）,
+ *   p0050: [{d, c(還原權息), raw(收盤)}] 至少 260 筆, vix: [{d,c}], sox: [{d,c}], tnx: [{d,c}],
+ *   ndc: {score, month} 或 null（國發會景氣對策信號分數）,
+ *   lumps: [{d, amount}] 今年與去年的 0050 單筆買進（台幣，正數）,
+ *   budgets: {年: 預算}（沒填用 40 萬）, start: 開始照這套規則記帳的年份（之前的年份不算滾存）
+ * }
+ */
+function etfAdvise(inp) {
+  const R = ETF_RULES, today = inp.today, year = Number(today.slice(0, 4));
+  const P = (inp.p0050 || []).filter(x => x.d <= today);
+  if (P.length < 250) throw new Error('0050 價格資料不足');
+  const c = P.map(x => x.c), i = c.length - 1, last = P[i];
+  const hi250 = Math.max(...c.slice(Math.max(0, i - 249)));
+  const dd = c[i] / hi250 - 1, ma240 = etfSma(c, 240, i), bias = ma240 ? c[i] / ma240 - 1 : null;
+  const ma240prev = etfSma(c, 240, i - 20), upTrend = ma240 && ma240prev && c[i] > ma240 && ma240 > ma240prev;
+  // 價格換算：還原價和實際收盤的比例（除息後兩者不同）
+  const ratio = last.raw ? last.raw / last.c : 1;
+  const priceAt = d => Math.round(hi250 * (1 + d) * ratio * 100) / 100;
+
+  const V = etfBefore(inp.vix, today), S = etfBefore(inp.sox, today), T = etfBefore(inp.tnx, today);
+  const vix = V.length ? V[V.length - 1].c : null, vixMax10 = V.length ? Math.max(...V.slice(-10).map(x => x.c)) : null;
+  const soxChg = S.length > 1 ? S[S.length - 1].c / S[S.length - 2].c - 1 : null;
+  const tnx = T.length ? T[T.length - 1].c : null;
+  let tnx90 = null;
+  if (T.length) {
+    const t0 = new Date(T[T.length - 1].d + 'T00:00:00Z'); t0.setUTCDate(t0.getUTCDate() - 90);
+    const ref = T.filter(x => x.d <= t0.toISOString().slice(0, 10)).pop();
+    if (ref) tnx90 = tnx - ref.c;   // ^TNX 是殖利率 %（例如 4.92）
+  }
+  const rateShock = tnx90 != null && tnx90 > 0.75;
+  const ndc = inp.ndc && inp.ndc.score != null ? Number(inp.ndc.score) : null;
+
+  const pct = x => (x < 0 ? '−' : '') + Math.abs(x * 100).toFixed(1) + '%';
+  const signals = [
+    { id: 'ndc', name: '景氣谷底＋深跌', on: ndc != null && ndc <= 22 && dd <= -0.20,
+      need: '景氣燈號分數 ≤ 22 且跌幅 ≤ −20%', now: `景氣分數 ${ndc == null ? '未知' : ndc}、跌幅 ${pct(dd)}` },
+    { id: 'vix', name: 'VIX 恐慌退燒', on: vixMax10 != null && vixMax10 >= 30 && vix < vixMax10 * 0.85 && dd <= -0.08,
+      need: '近 10 日 VIX 最高 ≥ 30、今天低於最高 × 0.85、跌幅 ≤ −8%', now: `VIX ${vix == null ? '—' : vix.toFixed(1)}（近 10 日最高 ${vixMax10 == null ? '—' : vixMax10.toFixed(1)}）` },
+    { id: 'sox', name: '費半夜殺', on: soxChg != null && soxChg < -0.05 && dd <= -0.10,
+      need: '前一晚費半跌超過 5% 且跌幅 ≤ −10%', now: `費半前一晚 ${soxChg == null ? '—' : (soxChg >= 0 ? '+' : '') + pct(soxChg)}` },
+    { id: 'dd15', name: '回檔 15%', on: dd <= -0.15 && !rateShock,
+      need: '跌幅 ≤ −15% 且不是升息衝擊', now: `跌幅 ${pct(dd)}${rateShock ? '（升息衝擊中，暫停）' : ''}` }
+  ];
+  const fired = signals.filter(s => s.on);
+
+  // ---- 預算與實際投入 ----
+  const budgetOf = y => { const b = Number((inp.budgets || {})[y]); return b > 0 ? b : R.budgetDefault; };
+  const lumps = (inp.lumps || []).filter(x => x.amount > 0);
+  const sumYear = y => lumps.filter(x => x.d.slice(0, 4) === String(y)).reduce((t, x) => t + x.amount, 0);
+  const B = budgetOf(year), prevB = budgetOf(year - 1);
+  // 去年沒用完的預備金滾進今年，最多一年份預算（去年超過上限的部分，照規則應該在 12 月最後一天投掉）
+  const start = Number(inp.start) || year;
+  const carry = year - 1 >= start ? Math.max(0, Math.min(prevB, prevB - sumYear(year - 1))) : 0;
+  const core = Math.round(B * R.coreRatio), reserve = B - core + carry;
+  const used = sumYear(year), coreLeft = Math.max(0, core - used);
+  const remaining = Math.max(0, B + carry - used);
+  const reserveLeft = Math.max(0, remaining - coreLeft);
+  const unit = Math.round(reserve / R.units / 1000) * 1000;
+
+  // 交易日：平日且不是休市日
+  const hol = new Set(inp.holidays || []);
+  const isTradeDay = d => { const w = new Date(d + 'T00:00:00Z').getUTCDay(); return w > 0 && w < 6 && !hol.has(d); };
+  const monthDays = (y, mo) => { const out = []; for (let k = 1; k <= 31; k++) { const d = `${y}-${String(mo).padStart(2, '0')}-${String(k).padStart(2, '0')}`; if (new Date(d + 'T00:00:00Z').getUTCMonth() + 1 === mo && isTradeDay(d)) out.push(d); } return out; };
+  const isTrade = isTradeDay(today);
+  const lastLump = lumps.map(x => x.d).filter(d => d <= today).sort().pop() || null;
+  let gap = null;
+  if (lastLump) {
+    const hist = P.map(x => x.d).concat(isTrade && P[P.length - 1].d !== today ? [today] : []);
+    gap = hist.filter(d => d > lastLump && d <= today).length;   // 上次買進之後經過幾個交易日
+  }
+  const cooling = gap != null && gap < R.gapDays;
+  const ymd = today.slice(5);
+  const lastTradeOfYear = monthDays(year, 12).pop();
+  const isJan = ymd < '02-01';
+  // 定期定額扣款日：每月 5 號，遇假日順延到下一個開盤日
+  const dcaDate = monthDays(year, Number(today.slice(5, 7))).find(d => Number(d.slice(8)) >= R.dcaDay) || null;
+  const dcaToday = isTrade && dcaDate === today;
+
+  // ---- 決定今天的建議 ----
+  const round = x => Math.round(x / 1000) * 1000;
+  let level = 'hold', title = '照常定期定額，不用動作', amount = 0;
+  const why = [];
+  if (!isTrade) {
+    level = 'closed'; title = '今天台股休市';
+    why.push('休市日不用動作。');
+  } else if (isJan && coreLeft > 0) {
+    level = 'core'; amount = round(coreLeft);
+    title = `一月核心投入：建議單筆買進約 ${(amount / 10000).toFixed(1)} 萬`;
+    why.push(`今年單筆預算 ${(B / 10000).toFixed(0)} 萬的 60% 是核心部位（${(core / 10000).toFixed(1)} 萬），1 月直接投入，不等回檔。` + (used ? `今年已投入 ${(used / 10000).toFixed(1)} 萬，還差 ${(coreLeft / 10000).toFixed(1)} 萬。` : ''));
+  } else if (fired.length && reserveLeft > 0 && !cooling) {
+    level = 'buy'; amount = round(Math.min(unit, reserveLeft));
+    title = `加碼訊號：建議單筆買進約 ${(amount / 10000).toFixed(1)} 萬`;
+    why.push(`成立的訊號：${fired.map(s => s.name).join('、')}。投入 1 份預備金（預備金 ÷ 3）。`);
+  } else if (fired.length && reserveLeft > 0 && cooling) {
+    level = 'wait'; title = `訊號成立，但距離上次加碼才 ${gap} 個交易日`;
+    why.push(`兩次加碼至少隔 ${R.gapDays} 個交易日，再等 ${R.gapDays - gap} 個交易日；到時訊號還成立就投入約 ${(round(Math.min(unit, reserveLeft)) / 10000).toFixed(1)} 萬。`);
+  } else if (fired.length && reserveLeft <= 0) {
+    level = 'full'; title = '訊號成立，但今年單筆預算已用完';
+    why.push(`今年已投入 ${(used / 10000).toFixed(1)} 萬，超過或等於預算 ${((B + carry) / 10000).toFixed(1)} 萬。只維持定期定額；有額外資金才考慮，屬於提前動用明年預算。`);
+  } else if (today === lastTradeOfYear && remaining > B) {
+    level = 'yearend'; amount = round(remaining - B);
+    title = `年底投入：建議買進約 ${(amount / 10000).toFixed(1)} 萬`;
+    why.push('預備金最多保留一年份預算，超過的部分在 12 月最後一個交易日投入。');
+  } else {
+    if (dd <= -0.15 && rateShock) { level = 'pause'; title = '升息衝擊中：回檔 15% 訊號暫停'; why.push(`10 年期美債 90 天上升 ${tnx90.toFixed(2)} 個百分點（> 0.75），先暫停一般回檔加碼，只看 VIX 與費半兩個恐慌訊號。`); }
+    else why.push('四個加碼訊號都沒有成立。長期來看，等待一般的小回檔反而少賺，所以沒訊號就只做定期定額。');
+  }
+  if (bias != null && bias > 0.30) why.push(`乖離年線 ${pct(bias)}，市場偏熱；照規則不賣，定期定額照常。`);
+  if (dcaToday) why.push(`今天是定期定額扣款日（每月 ${R.dcaDay} 號，假日順延），記得 ${(R.monthly / 10000).toFixed(0)} 萬照常扣款。`);
+
+  // 距離各訊號門檻
+  const levels = [-0.08, -0.10, -0.15, -0.20, -0.25, -0.30].map(x => ({ dd: x, price: priceAt(x) }));
+  return {
+    date: today, trading: isTrade, level, title, amount, why,
+    signals: signals.map(s => ({ id: s.id, name: s.name, on: s.on, need: s.need, now: s.now })),
+    ind: { close: last.raw || last.c, closeDate: last.d, hi250: priceAt(0), dd, ma240: ma240 ? Math.round(ma240 * ratio * 100) / 100 : null, bias, upTrend: !!upTrend,
+      vix, vixMax10, soxChg, tnx, tnx90, rateShock, ndc, ndcMonth: inp.ndc && inp.ndc.month || '' },
+    budget: { year, budget: B, carry, core, reserve, unit, used, coreLeft, remaining, reserveLeft, lastLump, gap, cooling,
+      unitRange: [R.budgetMin, R.budgetMax].map(b => Math.round((b - Math.round(b * R.coreRatio) + carry) / R.units / 1000) * 1000) },
+    levels, dcaToday, dcaDate
+  };
+}
+
+// ---- etf/webpush.js ----
+// Web Push（RFC 8291 aes128gcm＋RFC 8292 VAPID）純 JavaScript 版，給 Apps Script 用（它沒有 ECDH、AES-GCM）。
+// P-256 用 BigInt；AES-128-GCM 自己實作；HMAC／SHA-256／亂數由呼叫的人提供（Apps Script 用 Utilities）。
+// 位元組一律用 0～255 的一般陣列。
+
+const WP_P = 0xffffffff00000001000000000000000000000000ffffffffffffffffffffffffn;
+const WP_N = 0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551n;
+const WP_B = 0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604bn;
+const WP_G = [0x6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296n, 0x4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5n];
+
+const wpMod = (a, m) => { const r = a % m; return r < 0n ? r + m : r; };
+function wpInv(a, m) { // 擴展歐幾里得
+  let [r0, r1, s0, s1] = [wpMod(a, m), m, 1n, 0n];
+  while (r1) { const q = r0 / r1; [r0, r1] = [r1, r0 - q * r1]; [s0, s1] = [s1, s0 - q * s1]; }
+  return wpMod(s0, m);
+}
+// Jacobian 座標的點：[X, Y, Z]；無窮遠點 Z = 0
+function wpDbl(Pt) {
+  const [X, Y, Z] = Pt, p = WP_P;
+  if (!Z || !Y) return [0n, 1n, 0n];
+  const YY = Y * Y % p, S = 4n * X * YY % p, ZZ = Z * Z % p;
+  const M = 3n * (X - ZZ) * (X + ZZ) % p;   // a = -3
+  const X3 = wpMod(M * M - 2n * S, p), Y3 = wpMod(M * (S - X3) - 8n * YY * YY, p), Z3 = 2n * Y * Z % p;
+  return [X3, Y3, Z3];
+}
+function wpAdd(P1, P2) {
+  if (!P1[2]) return P2; if (!P2[2]) return P1;
+  const p = WP_P, [X1, Y1, Z1] = P1, [X2, Y2, Z2] = P2;
+  const Z1Z1 = Z1 * Z1 % p, Z2Z2 = Z2 * Z2 % p;
+  const U1 = X1 * Z2Z2 % p, U2 = X2 * Z1Z1 % p, S1 = Y1 * Z2 * Z2Z2 % p, S2 = Y2 * Z1 * Z1Z1 % p;
+  if (U1 === U2) return S1 === S2 ? wpDbl(P1) : [0n, 1n, 0n];
+  const H = wpMod(U2 - U1, p), R = wpMod(S2 - S1, p), HH = H * H % p, HHH = H * HH % p, V = U1 * HH % p;
+  const X3 = wpMod(R * R - HHH - 2n * V, p), Y3 = wpMod(R * (V - X3) - S1 * HHH, p), Z3 = Z1 * Z2 % p * H % p;
+  return [X3, Y3, Z3];
+}
+function wpMul(k, Pt) {
+  let R = [0n, 1n, 0n], Q = [Pt[0], Pt[1], 1n];
+  for (let i = BigInt(k.toString(2).length) - 1n; i >= 0n; i--) { R = wpDbl(R); if ((k >> i) & 1n) R = wpAdd(R, Q); }
+  if (!R[2]) throw new Error('point at infinity');
+  const zi = wpInv(R[2], WP_P), zi2 = zi * zi % WP_P;
+  return [R[0] * zi2 % WP_P, R[1] * zi2 % WP_P * zi % WP_P];
+}
+const wpToBig = b => b.reduce((t, x) => (t << 8n) | BigInt(x & 255), 0n);
+const wpFromBig = (n, len) => { const out = []; for (let i = 0; i < len; i++) { out.unshift(Number(n & 255n)); n >>= 8n; } return out; };
+const wpPointBytes = Pt => [4].concat(wpFromBig(Pt[0], 32), wpFromBig(Pt[1], 32));
+function wpPoint(bytes) {
+  if (bytes.length !== 65 || bytes[0] !== 4) throw new Error('bad public key');
+  const x = wpToBig(bytes.slice(1, 33)), y = wpToBig(bytes.slice(33));
+  if (wpMod(y * y - (x * x * x - 3n * x + WP_B), WP_P) !== 0n) throw new Error('point not on curve');
+  return [x, y];
+}
+function wpScalar(random) { // 1 ≤ k < n
+  for (;;) { const k = wpToBig(random(32)); if (k > 0n && k < WP_N) return k; }
+}
+
+/* ---------- AES-128 與 GCM ---------- */
+const WP_SBOX = (() => {
+  const s = new Array(256), inv = new Array(256); let p = 1, q = 1;
+  do {
+    p = p ^ ((p << 1) & 255) ^ (p & 128 ? 0x1b : 0);
+    q ^= q << 1; q ^= q << 2; q ^= q << 4; q &= 255; if (q & 128) q ^= 0x09;
+    const x = q ^ ((q << 1 | q >> 7) & 255) ^ ((q << 2 | q >> 6) & 255) ^ ((q << 3 | q >> 5) & 255) ^ ((q << 4 | q >> 4) & 255) ^ 0x63;
+    s[p] = x;
+  } while (p !== 1);
+  s[0] = 0x63; return s;
+})();
+const wpX2 = b => ((b << 1) ^ (b & 128 ? 0x1b : 0)) & 255;
+function wpAesKey(key) {
+  const w = key.slice(); let rc = 1;
+  for (let i = 16; i < 176; i += 4) {
+    let t = w.slice(i - 4, i);
+    if (i % 16 === 0) { t = [WP_SBOX[t[1]] ^ rc, WP_SBOX[t[2]], WP_SBOX[t[3]], WP_SBOX[t[0]]]; rc = wpX2(rc); }
+    for (let j = 0; j < 4; j++) w[i + j] = w[i - 16 + j] ^ t[j];
+  }
+  return w;
+}
+function wpAesBlock(w, input) {
+  let s = input.map((b, i) => b ^ w[i]);
+  for (let r = 1; r <= 10; r++) {
+    const t = s.map(b => WP_SBOX[b]);
+    const sh = new Array(16);
+    for (let c = 0; c < 4; c++) for (let rr = 0; rr < 4; rr++) sh[c * 4 + rr] = t[((c + rr) % 4) * 4 + rr];
+    if (r < 10) for (let c = 0; c < 4; c++) {
+      const a = sh.slice(c * 4, c * 4 + 4), x = a[0] ^ a[1] ^ a[2] ^ a[3];
+      for (let k = 0; k < 4; k++) sh[c * 4 + k] = a[k] ^ x ^ wpX2(a[k] ^ a[(k + 1) % 4]);
+    }
+    s = sh.map((b, i) => b ^ w[r * 16 + i]);
+  }
+  return s;
+}
+function wpGmul(X, Y) { // GF(2^128)，GCM 的位元順序
+  const R = 0xe1n << 120n; let Z = 0n, V = Y;
+  for (let i = 127; i >= 0; i--) { if ((X >> BigInt(i)) & 1n) Z ^= V; V = V & 1n ? (V >> 1n) ^ R : V >> 1n; }
+  return Z;
+}
+function wpGcmEncrypt(key, iv, pt) { // 沒有 AAD；回傳 密文＋16 位元組 tag
+  const w = wpAesKey(key), H = wpToBig(wpAesBlock(w, new Array(16).fill(0)));
+  const J0 = iv.concat([0, 0, 0, 1]), ct = [];
+  for (let i = 0, ctr = 2; i < pt.length; i += 16, ctr++) {
+    const cb = iv.concat(wpFromBig(BigInt(ctr), 4)), ks = wpAesBlock(w, cb);
+    for (let j = 0; j < 16 && i + j < pt.length; j++) ct.push(pt[i + j] ^ ks[j]);
+  }
+  let g = 0n;
+  for (let i = 0; i < ct.length; i += 16) { const blk = ct.slice(i, i + 16); while (blk.length < 16) blk.push(0); g = wpGmul(g ^ wpToBig(blk), H); }
+  g = wpGmul(g ^ BigInt(ct.length * 8), H);   // len(A)=0 || len(C)
+  const tag = wpFromBig(g, 16).map((b, i) => b ^ wpAesBlock(w, J0)[i]);
+  return ct.concat(tag);
+}
+
+/* ---------- HKDF、編碼 ---------- */
+const wpUtf8 = s => Array.from(unescape(encodeURIComponent(s)), c => c.charCodeAt(0));
+function wpHkdf(prim, salt, ikm, info, len) {
+  const prk = prim.hmac(salt, ikm);
+  return prim.hmac(prk, info.concat([1])).slice(0, len);   // len ≤ 32，一輪就夠
+}
+const WP_B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+function wpB64u(bytes) {
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 3) {
+    const n = (bytes[i] << 16) | ((bytes[i + 1] || 0) << 8) | (bytes[i + 2] || 0);
+    s += WP_B64[n >> 18 & 63] + WP_B64[n >> 12 & 63] + (i + 1 < bytes.length ? WP_B64[n >> 6 & 63] : '') + (i + 2 < bytes.length ? WP_B64[n & 63] : '');
+  }
+  return s;
+}
+function wpUnb64u(s) {
+  s = String(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const out = []; let buf = 0, bits = 0;
+  for (const ch of s) { const v = WP_B64.indexOf(ch); if (v < 0) throw new Error('bad base64'); buf = (buf << 6) | v; bits += 6; if (bits >= 8) { bits -= 8; out.push((buf >> bits) & 255); } }
+  return out;
+}
+
+/* ---------- 對外 ---------- */
+// 產生 VAPID 金鑰（第一次用時呼叫一次，存起來）
+function wpVapidKeys(prim) {
+  const d = wpScalar(prim.random);
+  return { publicKey: wpB64u(wpPointBytes(wpMul(d, WP_G))), privateKey: wpB64u(wpFromBig(d, 32)) };
+}
+function wpVapidAuth(endpoint, vapid, prim, subject) {
+  const aud = endpoint.match(/^https?:\/\/[^/]+/)[0];
+  const head = wpB64u(wpUtf8(JSON.stringify({ typ: 'JWT', alg: 'ES256' })));
+  const claims = wpB64u(wpUtf8(JSON.stringify({ aud, exp: Math.floor(Date.now() / 1000) + 12 * 3600, sub: subject })));
+  const z = wpToBig(prim.sha256(wpUtf8(head + '.' + claims))) % WP_N, d = wpToBig(wpUnb64u(vapid.privateKey));
+  let r, s;
+  do {
+    const k = wpScalar(prim.random);
+    r = wpMul(k, WP_G)[0] % WP_N;
+    s = wpInv(k, WP_N) * (z + r * d) % WP_N;
+  } while (!r || !s);
+  return `vapid t=${head}.${claims}.${wpB64u(wpFromBig(r, 32).concat(wpFromBig(s, 32)))}, k=${vapid.publicKey}`;
+}
+// sub = {endpoint, p256dh, auth}；回傳要 POST 的 body（位元組陣列）
+function wpEncrypt(sub, payload, prim) {
+  const ua = wpUnb64u(sub.p256dh), auth = wpUnb64u(sub.auth), uaPt = wpPoint(ua);
+  const e = wpScalar(prim.random), as = wpPointBytes(wpMul(e, WP_G));
+  const shared = wpFromBig(wpMul(e, uaPt)[0], 32);
+  const ikm = wpHkdf(prim, auth, shared, wpUtf8('WebPush: info\0').concat(ua, as), 32);
+  const salt = prim.random(16);
+  const cek = wpHkdf(prim, salt, ikm, wpUtf8('Content-Encoding: aes128gcm\0'), 16);
+  const nonce = wpHkdf(prim, salt, ikm, wpUtf8('Content-Encoding: nonce\0'), 12);
+  const ct = wpGcmEncrypt(cek, nonce, wpUtf8(payload).concat([2]));
+  return salt.concat([0, 0, 16, 0], [65], as, ct);   // rs = 4096
+}
+function wpRequest(sub, payload, vapid, prim, subject) {
+  return {
+    url: sub.endpoint, method: 'post', contentType: 'application/octet-stream', muteHttpExceptions: true,
+    headers: { Authorization: wpVapidAuth(sub.endpoint, vapid, prim, subject), 'Content-Encoding': 'aes128gcm', TTL: '43200', Urgency: 'high' },
+    payload: wpEncrypt(sub, payload, prim)
+  };
+}
+
+// ---- etf/gas.js ----
+// 0050 長期投資：Apps Script 這一端（抓行情、讀 0050 實際投入、存每日建議、送推播通知）
+// 每個台股開盤日 8:25～8:35（每 10 分鐘的 liveJob 順便檢查）自動跑一次；App 也可以要求「重新分析」。
+// Claude 的雲端排程每天 8:00 會把新聞解讀寫進「0050 建議」分頁同一天那一列的 E 欄，這裡推播時一起帶上。
+const ETF_CFG_SHEET = '0050 設定', ETF_LOG_SHEET = '0050 建議';
+const ETF_PUSH_SUBJECT = 'https://pv7999u7-prog.github.io/invest-dashboard-v2/';
+const ETF_LEVEL = { core: '核心投入', buy: '加碼', wait: '等待間隔', full: '預算用完', yearend: '年底投入', pause: '暫停加碼', hold: '照常', closed: '休市' };
+
+function etfPrim() {
+  const toB = a => a.map(x => ((x & 255) > 127 ? (x & 255) - 256 : x & 255));
+  const fromB = a => Array.from(a, x => x & 255);
+  return {
+    toB,
+    hmac: (k, d) => fromB(Utilities.computeHmacSignature(Utilities.MacAlgorithm.HMAC_SHA_256, toB(d), toB(k))),
+    sha256: d => fromB(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, toB(d))),
+    random: n => {
+      let out = [];
+      while (out.length < n) out = out.concat(fromB(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, Utilities.getUuid() + Utilities.getUuid() + Date.now() + Math.random())));
+      return out.slice(0, n);
+    }
+  };
+}
+const etfToday = () => Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy-MM-dd');
+
+/* ---------- 資料 ---------- */
+// Yahoo 日線：[{d:'YYYY-MM-DD'（交易所當地日期）, c:還原權息收盤, raw:收盤}]
+function etfChart(sym, range) {
+  let last = '';
+  for (const host of ['query1', 'query2']) {
+    const res = UrlFetchApp.fetch(`https://${host}.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?range=${range}&interval=1d&events=div%2Csplit`,
+      { muteHttpExceptions: true, headers: { 'User-Agent': 'Mozilla/5.0' } });
+    if (res.getResponseCode() !== 200) { last = sym + ' HTTP ' + res.getResponseCode(); continue; }
+    const r = JSON.parse(res.getContentText()).chart.result[0], q = r.indicators.quote[0];
+    const adj = ((r.indicators.adjclose || [])[0] || {}).adjclose || q.close, off = (r.meta && r.meta.gmtoffset) || 0;
+    const out = [];
+    (r.timestamp || []).forEach((t, i) => {
+      if (q.close[i] == null || adj[i] == null || q.close[i] <= 0) return;
+      const d = Utilities.formatDate(new Date((t + off) * 1000), 'UTC', 'yyyy-MM-dd');
+      if (out.length && out[out.length - 1].d === d) out.pop();
+      out.push({ d, c: adj[i], raw: q.close[i] });
+    });
+    if (out.length) return out;
+    last = sym + ' 沒有資料';
+  }
+  throw new Error('抓不到行情：' + last);
+}
+// 證交所休市日（平日但不開盤）；一年抓一次存起來
+function etfHolidays(year) {
+  const props = PropertiesService.getScriptProperties(), key = 'etf-hol-' + year, cached = props.getProperty(key);
+  if (cached) return JSON.parse(cached);
+  try {
+    const res = UrlFetchApp.fetch('https://openapi.twse.com.tw/v1/holidaySchedule/holidaySchedule', { muteHttpExceptions: true });
+    if (res.getResponseCode() !== 200) return [];
+    const out = [];
+    JSON.parse(res.getContentText()).forEach(x => {
+      const s = String(x.Date || '').replace(/\D/g, ''), name = String(x.Name || '') + String(x.Description || '');
+      if (/開始交易|最後交易/.test(name)) return;   // 這兩種日子有開盤
+      let d = '';
+      if (s.length === 7) d = `${Number(s.slice(0, 3)) + 1911}-${s.slice(3, 5)}-${s.slice(5)}`;
+      else if (s.length === 8) d = `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6)}`;
+      if (d) out.push(d);
+    });
+    if (out.some(d => d.slice(0, 4) === String(year))) props.setProperty(key, JSON.stringify(out));
+    return out;
+  } catch (err) { return []; }
+}
+// 0050 的單筆買進：台股分頁交易表（股號 0050、有買入股數）
+function etfLumps() {
+  const v = sh('台股').getDataRange().getDisplayValues(), h = v.findIndex(r => String(r[0]).trim() === '日期' && /股號/.test(r[3]));
+  if (h < 0) return [];
+  const out = [];
+  for (let i = h + 1; i < v.length; i++) {
+    const r = v[i], m = String(r[0]).match(/^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})/);
+    if (!m || String(r[3]).trim().toUpperCase() !== '0050' || !(num(r[5]) > 0)) continue;
+    const amount = Math.abs(num(r[7]) || 0) || Math.round(num(r[4]) * num(r[5]));
+    out.push({ d: `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`, amount });
+  }
+  return out;
+}
+function etfCfgSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  return ss.getSheetByName(ETF_CFG_SHEET);
+}
+function etfCfg() {
+  const s = etfCfgSheet(), out = {};
+  if (s) s.getDataRange().getDisplayValues().slice(1).forEach(r => { if (String(r[0]).trim()) out[String(r[0]).trim()] = String(r[1]).trim(); });
+  return out;
+}
+function etfCompute() {
+  const today = etfToday(), year = Number(today.slice(0, 4)), cfg = etfCfg(), budgets = {};
+  Object.keys(cfg).forEach(k => { const m = k.match(/^預算\s*(\d{4})$/); if (m && num(cfg[k]) > 0) budgets[m[1]] = num(cfg[k]); });
+  const adv = etfAdvise({
+    today, holidays: etfHolidays(year).concat(etfHolidays(year + 1)),
+    p0050: etfChart('0050.TW', '2y'), vix: etfChart('^VIX', '6mo'), sox: etfChart('^SOX', '6mo'), tnx: etfChart('^TNX', '1y'),
+    ndc: cfg['景氣燈號分數'] ? { score: num(cfg['景氣燈號分數']), month: cfg['景氣燈號月份'] || '' } : null,
+    lumps: etfLumps(), budgets, start: num(cfg['開始年份']) || year
+  });
+  adv.at = Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy/MM/dd HH:mm');
+  return adv;
+}
+
+/* ---------- 每日紀錄 ---------- */
+function etfLogSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let s = ss.getSheetByName(ETF_LOG_SHEET);
+  if (!s) { s = ss.insertSheet(ETF_LOG_SHEET); s.getRange('A:G').setNumberFormat('@'); s.getRange(1, 1, 1, 7).setValues([['日期', '燈號', '建議', '建議金額', 'Claude 解讀', '解讀時間', '詳細資料（App 用）']]); }
+  return s;
+}
+// 同一天只有一列：找得到就更新 B～D、G（E、F 是 Claude 寫的，不動），找不到就加在最後
+function etfSave(adv) {
+  const s = etfLogSheet(), last = s.getLastRow();
+  const dates = last > 1 ? s.getRange(2, 1, last - 1, 1).getDisplayValues().map(r => r[0]) : [];
+  const i = dates.lastIndexOf(adv.date), row = i >= 0 ? i + 2 : last + 1;
+  s.getRange(row, 1, 1, 4).setNumberFormat('@').setValues([[adv.date, ETF_LEVEL[adv.level] || adv.level, adv.title, adv.amount ? String(adv.amount) : '']]);
+  s.getRange(row, 7).setNumberFormat('@').setValue(JSON.stringify(adv));
+  return row;
+}
+function etfRows(n) {
+  const s = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(ETF_LOG_SHEET);
+  if (!s || s.getLastRow() < 2) return [];
+  const from = Math.max(2, s.getLastRow() - n + 1);
+  return s.getRange(from, 1, s.getLastRow() - from + 1, 7).getDisplayValues().filter(r => r[0]).map(r => {
+    let adv = null; try { adv = r[6] ? JSON.parse(r[6]) : null; } catch (e) {}
+    return { date: r[0], level: r[1], title: r[2], amount: num(r[3]) || 0, news: r[4], newsAt: r[5], adv };
+  });
+}
+
+/* ---------- 推播 ---------- */
+function etfVapid() {
+  const props = PropertiesService.getScriptProperties();
+  let v = props.getProperty('ETF_VAPID');
+  if (!v) { v = JSON.stringify(wpVapidKeys(etfPrim())); props.setProperty('ETF_VAPID', v); }
+  return JSON.parse(v);
+}
+const etfSubs = () => JSON.parse(PropertiesService.getScriptProperties().getProperty('ETF_SUBS') || '[]');
+const etfSetSubs = a => PropertiesService.getScriptProperties().setProperty('ETF_SUBS', JSON.stringify(a));
+function etfPushAll(msg) {
+  const subs = etfSubs();
+  if (!subs.length) return '還沒有裝置開啟通知';
+  const vapid = etfVapid(), prim = etfPrim(), payload = JSON.stringify(msg);
+  const reqs = subs.map(s => { const r = wpRequest(s, payload, vapid, prim, ETF_PUSH_SUBJECT); r.payload = prim.toB(r.payload); return r; });
+  const res = UrlFetchApp.fetchAll(reqs), keep = [], codes = [];
+  res.forEach((r, i) => { const c = r.getResponseCode(); codes.push(c); if (c !== 404 && c !== 410) keep.push(subs[i]); });
+  if (keep.length !== subs.length) etfSetSubs(keep);
+  PropertiesService.getScriptProperties().setProperty('etf-push', Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy/MM/dd HH:mm') + ' ' + codes.join(','));
+  return `已送出 ${subs.length} 台裝置（${codes.join('、')}）`;
+}
+function etfMessage(adv, news) {
+  const head = adv.level === 'buy' || adv.level === 'core' || adv.level === 'yearend' ? '🟢' : adv.level === 'pause' ? '🟠' : '⚪';
+  const first = String(news || '').split(/(?<=[。！？])/)[0].trim();
+  return { title: `${head} 0050 今日建議：${ETF_LEVEL[adv.level] || ''}`, body: adv.title + (first ? '\n' + first : ''), url: './#etfpop', tag: 'etf-' + adv.date };
+}
+
+// liveJob 每 10 分鐘叫一次：開盤日 8:25 之後還沒做就做
+function etfJob(force) {
+  const props = PropertiesService.getScriptProperties(), today = etfToday();
+  const hm = Utilities.formatDate(new Date(), 'Asia/Taipei', 'HH:mm');
+  if (!force && (hm < '08:25' || hm > '10:30' || props.getProperty('etf-done') === today)) return;
+  try {
+    const adv = etfCompute();
+    props.setProperty('etf-done', today);
+    if (!adv.trading) return;
+    const row = etfSave(adv), news = etfLogSheet().getRange(row, 5).getDisplayValue();
+    etfPushAll(etfMessage(adv, news));
+    props.deleteProperty('etf-error');
+  } catch (err) {
+    props.setProperty('etf-error', etfToday() + ' ' + String(err.message || err));
+  }
+}
+
+/* ---------- App 的請求 ---------- */
+function etfState() {
+  const props = PropertiesService.getScriptProperties();
+  return { cfg: etfCfg(), rows: etfRows(60), vapid: etfVapid().publicKey, subs: etfSubs().map(s => ({ device: s.device || '', at: s.at || '', id: s.endpoint.slice(-12) })),
+    done: props.getProperty('etf-done') || '', error: props.getProperty('etf-error') || '', push: props.getProperty('etf-push') || '' };
+}
+const ETF_ACTIONS = {
+  cfg(p) {
+    const key = String(p.key || ''), val = String(p.value == null ? '' : p.value).trim();
+    if (/^預算 \d{4}$/.test(key)) { if (!(num(val) >= 100000 && num(val) <= 3000000)) throw new Error('預算請填 10 萬～300 萬'); }
+    else if (key === '景氣燈號分數') { if (!(num(val) >= 9 && num(val) <= 45)) throw new Error('景氣燈號分數是 9～45'); }
+    else if (key === '開始年份') { if (!(num(val) >= 2020 && num(val) <= 2100)) throw new Error('年份不對'); }
+    else if (key !== '景氣燈號月份') throw new Error('不能改這個項目：' + key);
+    const s = etfCfgSheet(); if (!s) throw new Error(`找不到「${ETF_CFG_SHEET}」分頁`);
+    const v = s.getDataRange().getDisplayValues(), i = v.findIndex(r => String(r[0]).trim() === key);
+    const row = i >= 0 ? i + 1 : v.length + 1;
+    s.getRange(row, 1, 1, 2).setNumberFormat('@').setValues([[key, val]]);
+    return `已更新${key}`;
+  },
+  sub(p) {
+    const x = p.sub || {}, keys = x.keys || {};
+    if (!/^https:\/\//.test(x.endpoint || '') || !keys.p256dh || !keys.auth) throw new Error('通知訂閱資料不完整');
+    const subs = etfSubs().filter(s => s.endpoint !== x.endpoint);
+    subs.push({ endpoint: x.endpoint, p256dh: keys.p256dh, auth: keys.auth, device: String(p.device || '').slice(0, 40), at: Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy/MM/dd HH:mm') });
+    etfSetSubs(subs.slice(-5));
+    return '已開啟這台裝置的通知';
+  },
+  unsub(p) { etfSetSubs(etfSubs().filter(s => s.endpoint !== p.endpoint)); return '已關閉這台裝置的通知'; },
+  run() { const adv = etfCompute(); if (adv.trading) etfSave(adv); return adv.trading ? '已重新分析' : '今天休市，沒有新的建議'; },
+  test() { return etfPushAll({ title: '0050 通知測試', body: '收到這則就代表每天 8:30 的通知會送到這台裝置。', url: './#etfpop', tag: 'etf-test' }); }
+};
+function etfRequest(body) {
+  try {
+    let message = '';
+    if (body.etfAction) {
+      const fn = ETF_ACTIONS[body.etfAction];
+      if (!fn) throw new Error('不認得的動作：' + body.etfAction);
+      const lock = LockService.getScriptLock(); lock.waitLock(20000);
+      try { message = fn(body.payload || {}); SpreadsheetApp.flush(); } finally { lock.releaseLock(); }
+    }
+    return json({ ok: true, message, etf: etfState(), ms: msOut() });
+  } catch (err) {
+    return json({ ok: false, error: String(err.message || err) });
+  }
+}
+// ===== 0050 長期投資 結束 =====

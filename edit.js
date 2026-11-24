@@ -644,4 +644,5 @@ function bindEdit() {
   const ub = $('#undoBtn');
   if (ub) ub.addEventListener('click', () => doUndo(false));
   bindPolicy();
+  bindEtf();
 }
