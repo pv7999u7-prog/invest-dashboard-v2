@@ -3,24 +3,29 @@
 // 位元組一律用 0～255 的一般陣列。
 'use strict';
 
-const WP_P = 0xffffffff00000001000000000000000000000000ffffffffffffffffffffffffn;
-const WP_N = 0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551n;
-const WP_B = 0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604bn;
-const WP_G = [0x6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296n, 0x4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5n];
+// Apps Script 的編輯器不認得 123n 這種 BigInt 寫法，所以常數都用 BigInt() 建立；
+// 萬一執行環境沒有 BigInt，這裡不能出錯（不然整個 Apps Script 都不能跑），只有推播會失敗
+const wpBig = x => (typeof BigInt === 'function' ? BigInt(x) : null);
+const WN0 = wpBig(0), WN1 = wpBig(1), WN2 = wpBig(2), WN3 = wpBig(3), WN4 = wpBig(4), WN8 = wpBig(8), WN120 = wpBig(120), WN255 = wpBig(255);
 
-const wpMod = (a, m) => { const r = a % m; return r < 0n ? r + m : r; };
+const WP_P = wpBig('0xffffffff00000001000000000000000000000000ffffffffffffffffffffffff');
+const WP_N = wpBig('0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551');
+const WP_B = wpBig('0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b');
+const WP_G = [wpBig('0x6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296'), wpBig('0x4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5')];
+
+const wpMod = (a, m) => { const r = a % m; return r < WN0 ? r + m : r; };
 function wpInv(a, m) { // 擴展歐幾里得
-  let [r0, r1, s0, s1] = [wpMod(a, m), m, 1n, 0n];
+  let [r0, r1, s0, s1] = [wpMod(a, m), m, WN1, WN0];
   while (r1) { const q = r0 / r1; [r0, r1] = [r1, r0 - q * r1]; [s0, s1] = [s1, s0 - q * s1]; }
   return wpMod(s0, m);
 }
 // Jacobian 座標的點：[X, Y, Z]；無窮遠點 Z = 0
 function wpDbl(Pt) {
   const [X, Y, Z] = Pt, p = WP_P;
-  if (!Z || !Y) return [0n, 1n, 0n];
-  const YY = Y * Y % p, S = 4n * X * YY % p, ZZ = Z * Z % p;
-  const M = 3n * (X - ZZ) * (X + ZZ) % p;   // a = -3
-  const X3 = wpMod(M * M - 2n * S, p), Y3 = wpMod(M * (S - X3) - 8n * YY * YY, p), Z3 = 2n * Y * Z % p;
+  if (!Z || !Y) return [WN0, WN1, WN0];
+  const YY = Y * Y % p, S = WN4 * X * YY % p, ZZ = Z * Z % p;
+  const M = WN3 * (X - ZZ) * (X + ZZ) % p;   // a = -3
+  const X3 = wpMod(M * M - WN2 * S, p), Y3 = wpMod(M * (S - X3) - WN8 * YY * YY, p), Z3 = WN2 * Y * Z % p;
   return [X3, Y3, Z3];
 }
 function wpAdd(P1, P2) {
@@ -28,29 +33,29 @@ function wpAdd(P1, P2) {
   const p = WP_P, [X1, Y1, Z1] = P1, [X2, Y2, Z2] = P2;
   const Z1Z1 = Z1 * Z1 % p, Z2Z2 = Z2 * Z2 % p;
   const U1 = X1 * Z2Z2 % p, U2 = X2 * Z1Z1 % p, S1 = Y1 * Z2 * Z2Z2 % p, S2 = Y2 * Z1 * Z1Z1 % p;
-  if (U1 === U2) return S1 === S2 ? wpDbl(P1) : [0n, 1n, 0n];
+  if (U1 === U2) return S1 === S2 ? wpDbl(P1) : [WN0, WN1, WN0];
   const H = wpMod(U2 - U1, p), R = wpMod(S2 - S1, p), HH = H * H % p, HHH = H * HH % p, V = U1 * HH % p;
-  const X3 = wpMod(R * R - HHH - 2n * V, p), Y3 = wpMod(R * (V - X3) - S1 * HHH, p), Z3 = Z1 * Z2 % p * H % p;
+  const X3 = wpMod(R * R - HHH - WN2 * V, p), Y3 = wpMod(R * (V - X3) - S1 * HHH, p), Z3 = Z1 * Z2 % p * H % p;
   return [X3, Y3, Z3];
 }
 function wpMul(k, Pt) {
-  let R = [0n, 1n, 0n], Q = [Pt[0], Pt[1], 1n];
-  for (let i = BigInt(k.toString(2).length) - 1n; i >= 0n; i--) { R = wpDbl(R); if ((k >> i) & 1n) R = wpAdd(R, Q); }
+  let R = [WN0, WN1, WN0], Q = [Pt[0], Pt[1], WN1];
+  for (let i = wpBig(k.toString(2).length) - WN1; i >= WN0; i--) { R = wpDbl(R); if ((k >> i) & WN1) R = wpAdd(R, Q); }
   if (!R[2]) throw new Error('point at infinity');
   const zi = wpInv(R[2], WP_P), zi2 = zi * zi % WP_P;
   return [R[0] * zi2 % WP_P, R[1] * zi2 % WP_P * zi % WP_P];
 }
-const wpToBig = b => b.reduce((t, x) => (t << 8n) | BigInt(x & 255), 0n);
-const wpFromBig = (n, len) => { const out = []; for (let i = 0; i < len; i++) { out.unshift(Number(n & 255n)); n >>= 8n; } return out; };
+const wpToBig = b => b.reduce((t, x) => (t << WN8) | wpBig(x & 255), WN0);
+const wpFromBig = (n, len) => { const out = []; for (let i = 0; i < len; i++) { out.unshift(Number(n & WN255)); n >>= WN8; } return out; };
 const wpPointBytes = Pt => [4].concat(wpFromBig(Pt[0], 32), wpFromBig(Pt[1], 32));
 function wpPoint(bytes) {
   if (bytes.length !== 65 || bytes[0] !== 4) throw new Error('bad public key');
   const x = wpToBig(bytes.slice(1, 33)), y = wpToBig(bytes.slice(33));
-  if (wpMod(y * y - (x * x * x - 3n * x + WP_B), WP_P) !== 0n) throw new Error('point not on curve');
+  if (wpMod(y * y - (x * x * x - WN3 * x + WP_B), WP_P) !== WN0) throw new Error('point not on curve');
   return [x, y];
 }
 function wpScalar(random) { // 1 ≤ k < n
-  for (;;) { const k = wpToBig(random(32)); if (k > 0n && k < WP_N) return k; }
+  for (;;) { const k = wpToBig(random(32)); if (k > WN0 && k < WP_N) return k; }
 }
 
 /* ---------- AES-128 與 GCM ---------- */
@@ -89,20 +94,20 @@ function wpAesBlock(w, input) {
   return s;
 }
 function wpGmul(X, Y) { // GF(2^128)，GCM 的位元順序
-  const R = 0xe1n << 120n; let Z = 0n, V = Y;
-  for (let i = 127; i >= 0; i--) { if ((X >> BigInt(i)) & 1n) Z ^= V; V = V & 1n ? (V >> 1n) ^ R : V >> 1n; }
+  const R = wpBig('0xe1') << WN120; let Z = WN0, V = Y;
+  for (let i = 127; i >= 0; i--) { if ((X >> wpBig(i)) & WN1) Z ^= V; V = V & WN1 ? (V >> WN1) ^ R : V >> WN1; }
   return Z;
 }
 function wpGcmEncrypt(key, iv, pt) { // 沒有 AAD；回傳 密文＋16 位元組 tag
   const w = wpAesKey(key), H = wpToBig(wpAesBlock(w, new Array(16).fill(0)));
   const J0 = iv.concat([0, 0, 0, 1]), ct = [];
   for (let i = 0, ctr = 2; i < pt.length; i += 16, ctr++) {
-    const cb = iv.concat(wpFromBig(BigInt(ctr), 4)), ks = wpAesBlock(w, cb);
+    const cb = iv.concat(wpFromBig(wpBig(ctr), 4)), ks = wpAesBlock(w, cb);
     for (let j = 0; j < 16 && i + j < pt.length; j++) ct.push(pt[i + j] ^ ks[j]);
   }
-  let g = 0n;
+  let g = WN0;
   for (let i = 0; i < ct.length; i += 16) { const blk = ct.slice(i, i + 16); while (blk.length < 16) blk.push(0); g = wpGmul(g ^ wpToBig(blk), H); }
-  g = wpGmul(g ^ BigInt(ct.length * 8), H);   // len(A)=0 || len(C)
+  g = wpGmul(g ^ wpBig(ct.length * 8), H);   // len(A)=0 || len(C)
   const tag = wpFromBig(g, 16).map((b, i) => b ^ wpAesBlock(w, J0)[i]);
   return ct.concat(tag);
 }
@@ -132,6 +137,7 @@ function wpUnb64u(s) {
 /* ---------- 對外 ---------- */
 // 產生 VAPID 金鑰（第一次用時呼叫一次，存起來）
 function wpVapidKeys(prim) {
+  if (typeof BigInt !== 'function') throw new Error('這個 Apps Script 執行環境不支援 BigInt，無法送推播');
   const d = wpScalar(prim.random);
   return { publicKey: wpB64u(wpPointBytes(wpMul(d, WP_G))), privateKey: wpB64u(wpFromBig(d, 32)) };
 }
@@ -161,6 +167,7 @@ function wpEncrypt(sub, payload, prim) {
   return salt.concat([0, 0, 16, 0], [65], as, ct);   // rs = 4096
 }
 function wpRequest(sub, payload, vapid, prim, subject) {
+  if (typeof BigInt !== 'function') throw new Error('這個 Apps Script 執行環境不支援 BigInt，無法送推播');
   return {
     url: sub.endpoint, method: 'post', contentType: 'application/octet-stream', muteHttpExceptions: true,
     headers: { Authorization: wpVapidAuth(sub.endpoint, vapid, prim, subject), 'Content-Encoding': 'aes128gcm', TTL: '43200', Urgency: 'high' },

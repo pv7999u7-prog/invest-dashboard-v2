@@ -146,7 +146,7 @@ function etfPushAll(msg) {
 }
 function etfMessage(adv, news) {
   const head = adv.level === 'buy' || adv.level === 'core' || adv.level === 'yearend' ? '🟢' : adv.level === 'pause' ? '🟠' : '⚪';
-  const first = String(news || '').split(/(?<=[。！？])/)[0].trim();
+  const first = (String(news || '').match(/^[^。！？]*[。！？]?/) || [''])[0].trim();
   return { title: `${head} 0050 今日建議：${ETF_LEVEL[adv.level] || ''}`, body: adv.title + (first ? '\n' + first : ''), url: './#etfpop', tag: 'etf-' + adv.date };
 }
 
